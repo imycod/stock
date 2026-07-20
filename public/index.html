@@ -3,14 +3,14 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>600759 洲际油气 · 行情分析</title>
+    <title>股票行情分析 · 多标的</title>
     <link rel="stylesheet" href="/style.css" />
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
   </head>
   <body>
     <header>
-      <h1>600759 洲际油气 <span>分钟级采集 · 趋势分析</span></h1>
+      <h1 id="stockTitle">-- <span>分钟级采集 · 趋势分析</span></h1>
       <div class="badges">
         <span class="badge" id="tradingBadge">--</span>
         <span class="badge" id="recordBadge">--</span>
@@ -19,6 +19,12 @@
     </header>
 
     <main>
+      <div class="stock-bar">
+        <label for="stockCodeInput">股票代码</label>
+        <input id="stockCodeInput" type="text" maxlength="6" placeholder="600759" />
+        <button type="button" onclick="switchStock()">切换</button>
+        <div class="watchlist-chips" id="watchlistChips"></div>
+      </div>
       <div class="actions">
         <button onclick="refreshAll()">立即刷新</button>
         <button class="secondary" onclick="manualCollect()">手动采集</button>

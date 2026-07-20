@@ -8,6 +8,15 @@ const HORIZON_LABEL = {
   depth: '深度行情',
 };
 
+const STORAGE_KEY = 'stockCode';
+let currentCode = localStorage.getItem(STORAGE_KEY) || '600759';
+
+function withCode(path, extra = {}) {
+  const params = new URLSearchParams({ code: currentCode, ...extra });
+  const q = params.toString();
+  return q ? `${path}?${q}` : path;
+}
+
 let charts = {};
 let turnoverVolumeChart = null;
 let dailyMetricChart = null;
@@ -844,6 +853,66 @@ function renderLhbSeats(seats) {
     </table>`;
 }
 
+
+
+function setCurrentCode(code) {
+  currentCode = code;
+  localStorage.setItem(STORAGE_KEY, code);
+  const input = document.getElementById('stockCodeInput');
+  if (input) input.value = code;
+}
+
+function renderWatchlistChips(watchlist) {
+  const el = document.getElementById('watchlistChips');
+  if (!el || !watchlist?.length) {
+    if (el) el.innerHTML = '';
+    return;
+  }
+  el.innerHTML = watchlist
+    .map(
+      (w) =>
+        `<button type="button" class="chip ${w.code === currentCode ? 'active' : ''}" onclick="selectStock('${w.code}')">${w.code} ${w.name || ''}</button>`
+    )
+    .join('');
+}
+
+function updateStockTitle(stock) {
+  const h = document.getElementById('stockTitle');
+  if (!h || !stock) return;
+  h.childNodes[0].textContent = `${stock.code} ${stock.name || ''} `;
+  document.title = `${stock.code} ${stock.name || ''} · 行情分析`;
+}
+
+async function switchStock() {
+  const input = document.getElementById('stockCodeInput');
+  const code = (input?.value || '').trim();
+  if (!/^[0-9]{6}$/.test(code)) {
+    alert('请输入 6 位股票代码');
+    return;
+  }
+  try {
+    const res = await fetch('/api/stocks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || '切换失败');
+    setCurrentCode(data.stock.code);
+    renderWatchlistChips(data.watchlist);
+    await setCurrentCode(currentCode);
+document.getElementById('stockCodeInput').value = currentCode;
+refreshAll();
+  } catch (e) {
+    alert(e.message);
+  }
+}
+
+function selectStock(code) {
+  setCurrentCode(code);
+  refreshAll();
+}
+
 async function refreshAll() {
   try {
     const [statusRes, quoteRes, analysisRes] = await Promise.all([
@@ -866,6 +935,9 @@ async function refreshAll() {
       ? `更新 ${new Date(quote.updated_at).toLocaleTimeString('zh-CN')}`
       : '--';
 
+    setCurrentCode(status.stock?.code || currentCode);
+    updateStockTitle(status.stock);
+    renderWatchlistChips(status.watchlist);
     renderSummary(quote, status.stats);
     renderThreeDayEnergy(analysis.threeDayEnergy);
     renderSignals(analysis.signals);
@@ -877,7 +949,7 @@ async function refreshAll() {
 }
 
 async function manualCollect() {
-  await fetch('/api/collect', { method: 'POST' });
+  await fetch(withCode('/api/collect'), { method: 'POST' });
   await refreshAll();
 }
 

@@ -85,6 +85,14 @@ function initSchema() {
       UNIQUE(trade_date, code)
     );
 
+    CREATE TABLE IF NOT EXISTS watchlist (
+      code TEXT PRIMARY KEY,
+      name TEXT,
+      market TEXT NOT NULL,
+      secid TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now','localtime'))
+    );
+
     CREATE TABLE IF NOT EXISTS lhb_records (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       trade_date TEXT NOT NULL,
@@ -179,7 +187,65 @@ function getLatestSignals(tradeDate, code) {
     .all(tradeDate, code);
 }
 
-function getStats() {
+function getWatchlist() {
+  return getDb()
+    .prepare("SELECT code, name, market, secid FROM watchlist ORDER BY code")
+    .all();
+}
+
+function getWatchlistStock(code) {
+  return getDb()
+    .prepare("SELECT code, name, market, secid FROM watchlist WHERE code = ?")
+    .get(code);
+}
+
+function upsertWatchlistStock(row) {
+  const stmt = getDb().prepare(`
+    INSERT INTO watchlist (code, name, market, secid)
+    VALUES (@code, @name, @market, @secid)
+    ON CONFLICT(code) DO UPDATE SET
+      name=excluded.name, market=excluded.market, secid=excluded.secid
+  `);
+  return stmt.run(row);
+}
+
+function getStats(code) {
+  if (code) {
+    const minuteCount = getDb()
+      .prepare("SELECT COUNT(*) AS c FROM minute_snapshots WHERE code = ?")
+      .get(code).c;
+    const dailyCount = getDb()
+      .prepare("SELECT COUNT(*) AS c FROM daily_quotes WHERE code = ?")
+      .get(code).c;
+    const lastSnap = getDb()
+      .prepare(
+        `SELECT trade_date, trade_time, price, code FROM minute_snapshots
+         WHERE code = ? ORDER BY id DESC LIMIT 1`
+      )
+      .get(code);
+    return { minuteCount, dailyCount, lastSnap, code };
+  }
+
+  const minuteCount = getDb()
+    .prepare("SELECT COUNT(*) AS c FROM minute_snapshots")
+    .get().c;
+  const dailyCount = getDb()
+    .prepare("SELECT COUNT(*) AS c FROM daily_quotes")
+    .get().c;
+  const lastSnap = getDb()
+    .prepare(
+      "SELECT trade_date, trade_time, price, code FROM minute_snapshots ORDER BY id DESC LIMIT 1"
+    )
+    .get();
+  const byStock = getDb()
+    .prepare(
+      `SELECT code, COUNT(*) AS minuteCount FROM minute_snapshots GROUP BY code ORDER BY code`
+    )
+    .all();
+  return { minuteCount, dailyCount, lastSnap, byStock };
+}
+
+function getStatsLegacy() {
   const minuteCount = getDb()
     .prepare('SELECT COUNT(*) AS c FROM minute_snapshots')
     .get().c;

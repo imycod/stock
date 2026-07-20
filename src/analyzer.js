@@ -546,8 +546,18 @@ function analyzeMarketDepth(deep) {
   };
 }
 
-async function runAnalysis() {
-  const { code } = config.stock;
+async function runAnalysis(stock) {
+  const s =
+    stock?.code && stock?.secid
+      ? stock
+      : require("./stocks").resolveStockFromRecord(stock) ||
+        require("./stocks").stockFromParts(
+          require("../config").defaultStockCode,
+          "",
+          null
+        );
+
+  const { code, secid, market, name } = s;
   const tradeDate = api.todayStr();
   const minuteRows = db.getMinuteSnapshots(tradeDate, code);
   const dailyRows = db.getDailyQuotes(code, 60);
@@ -556,7 +566,7 @@ async function runAnalysis() {
     .getRealtimeQuote(
       config.benchmark.secid,
       config.benchmark.code,
-      'SH'
+      "SH"
     )
     .catch(() => null);
 
@@ -565,31 +575,54 @@ async function runAnalysis() {
   const daily = analyzeDaily(dailyRows);
   const threeDay = analyzeThreeDay(dailyRows);
   const sentiment = await analyzeSentiment(minuteRows);
-  const composite = compositeTrend([intraday, daily, threeDay, sentiment]);
+
+  let deepData = null;
+  try {
+    const quote = await api.getRealtimeQuote(secid, code, market);
+    const marginHistory = db.getMarginSnapshots(code, 30);
+    deepData = await marketDepthApi.fetchMarketDepth({
+      secid,
+      code,
+      quote,
+      dailyRows,
+      marginHistory,
+    });
+  } catch {
+    deepData = null;
+  }
+
+  const depthSignal = analyzeMarketDepth(deepData);
+  const composite = compositeTrend([
+    intraday,
+    daily,
+    threeDay,
+    sentiment,
+    depthSignal,
+  ]);
 
   const all = [intraday, daily, threeDay, sentiment, depthSignal, composite];
-  for (const s of all) {
+  for (const sig of all) {
     db.upsertSignal({
       trade_date: tradeDate,
       code,
-      horizon: s.horizon,
-      trend: s.trend,
-      score: s.score,
-      confidence: s.confidence,
-      reasons: s.reasons,
+      horizon: sig.horizon,
+      trend: sig.trend,
+      score: sig.score,
+      confidence: sig.confidence,
+      reasons: sig.reasons,
     });
   }
 
-  const closes = dailyRows.map((r) => r.close);
   return {
     tradeDate,
     code,
-    name: config.stock.name,
+    name: name || code,
     threeDayEnergy,
     signals: all,
     minuteCount: minuteRows.length,
     dailyCount: dailyRows.length,
     chart: buildChartData(minuteRows, dailyRows, daily.indicators),
+    deep: deepData,
   };
 }
 
