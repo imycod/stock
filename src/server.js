@@ -1,4 +1,11 @@
 const path = require('path');
+if (process.platform === 'win32') {
+  try {
+    require('child_process').execSync('chcp 65001 >nul', { stdio: 'ignore' });
+  } catch {
+    /* ignore */
+  }
+}
 const express = require('express');
 const cron = require('node-cron');
 const config = require('../config');
@@ -9,8 +16,29 @@ const api = require('./api/eastmoney');
 const marketDepth = require('./api/marketDepth');
 const stocks = require('./stocks');
 
+const publicDir = path.join(__dirname, '../public');
 const app = express();
-app.use(express.static(path.join(__dirname, '../public')));
+app.use(
+  express.static(publicDir, {
+    setHeaders(res, filePath) {
+      if (filePath.endsWith('.html')) {
+        res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      } else if (filePath.endsWith('.js')) {
+        res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+      } else if (filePath.endsWith('.css')) {
+        res.setHeader('Content-Type', 'text/css; charset=utf-8');
+      }
+    },
+  })
+);
+app.use((req, res, next) => {
+  const origJson = res.json.bind(res);
+  res.json = (body) => {
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    return origJson(body);
+  };
+  next();
+});
 app.use(express.json());
 
 const analysisCache = new Map();

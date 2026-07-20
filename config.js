@@ -2,7 +2,7 @@
 module.exports = {
   defaultStockCode: process.env.DEFAULT_STOCK || '600759',
   /** 定时采集的股票代码列表 */
-  watchlist: ['600759'],
+  watchlist: ['600759', '600660', '002129','601212','601899'],
   benchmark: {
     code: '000001',
     name: '上证指数',
