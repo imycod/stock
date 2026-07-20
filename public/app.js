@@ -890,6 +890,17 @@ async function switchStock() {
     alert('请输入 6 位股票代码');
     return;
   }
+  setCurrentCode(code);
+  await refreshAll();
+}
+
+async function addToWatchlist() {
+  const input = document.getElementById('stockCodeInput');
+  const code = (input?.value || '').trim();
+  if (!/^[0-9]{6}$/.test(code)) {
+    alert('请输入 6 位股票代码');
+    return;
+  }
   try {
     const res = await fetch('/api/stocks', {
       method: 'POST',
@@ -897,12 +908,10 @@ async function switchStock() {
       body: JSON.stringify({ code }),
     });
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || '切换失败');
-    setCurrentCode(data.stock.code);
+    if (!res.ok) throw new Error(data.error || '加入监控失败');
     renderWatchlistChips(data.watchlist);
-    await setCurrentCode(currentCode);
-document.getElementById('stockCodeInput').value = currentCode;
-refreshAll();
+    setCurrentCode(data.stock.code);
+    await refreshAll();
   } catch (e) {
     alert(e.message);
   }
@@ -916,9 +925,9 @@ function selectStock(code) {
 async function refreshAll() {
   try {
     const [statusRes, quoteRes, analysisRes] = await Promise.all([
-      fetch('/api/status'),
-      fetch('/api/quote'),
-      fetch('/api/analysis?refresh=1'),
+      fetch(withCode('/api/status')),
+      fetch(withCode('/api/quote')),
+      fetch(withCode('/api/analysis', { refresh: '1' })),
     ]);
 
     const status = await statusRes.json();

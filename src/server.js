@@ -17,6 +17,19 @@ const analysisCache = new Map();
 const deepCache = new Map();
 let lastCollectByCode = {};
 
+async function syncWatchlistFromConfig() {
+  for (const code of config.watchlist || []) {
+    if (!code) continue;
+    if (db.getWatchlistStock(code)) continue;
+    try {
+      const stock = await stocks.resolveStock(code, api);
+      db.upsertWatchlistStock(stock);
+    } catch (e) {
+      console.warn(`[watchlist] config 代码 ${code} 解析失败:`, e.message);
+    }
+  }
+}
+
 async function ensureWatchlistSeeded() {
   const existing = db.getWatchlist();
   const codes = new Set(existing.map((r) => r.code));
@@ -46,6 +59,7 @@ async function resolveStockForRequest(req) {
 
 async function bootstrap() {
   await ensureWatchlistSeeded();
+  await syncWatchlistFromConfig();
 
   console.log('[init] 同步监控列表历史日K...');
   try {

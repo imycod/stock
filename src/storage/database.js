@@ -314,4 +314,11 @@ module.exports = {
   getDailyQuotes,
   getLatestSignals,
   getStats,
+  getWatchlist,
+  getWatchlistStock,
+  upsertWatchlistStock,
+  upsertMarginSnapshot,
+  getMarginSnapshots,
+  upsertLhbRecord,
+  getLhbRecords,
 };
