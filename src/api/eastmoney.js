@@ -157,24 +157,27 @@ async function getEastmoneyQuote(secid) {
   const json = await fetchJson(url);
   const d = json.data;
   if (!d) return null;
-  const scale = d.f43 > 1000 ? 100 : 1;
+  // invt=2&fltt=2：价格、涨跌幅、量比、换手率为小数，勿再 /100
+  const intMode = typeof d.f43 === "number" && d.f43 > 1000;
+  const priceScale = intMode ? 100 : 1;
+  const pctScale = intMode ? 100 : 1;
   return {
     code: d.f57,
     name: d.f58,
-    price: d.f43 / scale,
-    open: d.f46 / scale,
-    high: d.f44 / scale,
-    low: d.f45 / scale,
-    pre_close: d.f60 / scale,
+    price: d.f43 / priceScale,
+    open: d.f46 / priceScale,
+    high: d.f44 / priceScale,
+    low: d.f45 / priceScale,
+    pre_close: d.f60 / priceScale,
     volume: d.f47,
     amount: d.f48,
-    volume_ratio: d.f50 / 100,
-    turnover_rate: d.f168 / 100,
-    change: d.f169 / scale,
-    pct_change: d.f170 / 100,
-    amplitude: d.f171 / 100,
-    pe: d.f84 ? d.f84 / 100 : null,
-    pb: d.f85 ? d.f85 / 100 : null,
+    volume_ratio: d.f50 / pctScale,
+    turnover_rate: d.f168 / pctScale,
+    change: d.f169 / priceScale,
+    pct_change: d.f170 / pctScale,
+    amplitude: d.f171 / pctScale,
+    pe: d.f84 && d.f84 < 1e6 ? d.f84 / 100 : null,
+    pb: d.f85 && d.f85 < 1e6 ? d.f85 / 100 : null,
     updated_at: new Date().toISOString(),
     source: "eastmoney",
   };
