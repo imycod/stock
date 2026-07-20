@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>600759 洲际油气 · 行情分析</title>
+    <link rel="stylesheet" href="/style.css" />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+  </head>
+  <body>
+    <header>
+      <h1>600759 洲际油气 <span>分钟级采集 · 趋势分析</span></h1>
+      <div class="badges">
+        <span class="badge" id="tradingBadge">--</span>
+        <span class="badge" id="recordBadge">--</span>
+        <span class="badge" id="updateBadge">--</span>
+      </div>
+    </header>
+
+    <main>
+      <div class="actions">
+        <button onclick="refreshAll()">立即刷新</button>
+        <button class="secondary" onclick="manualCollect()">手动采集</button>
+      </div>
+
+      <div class="summary-text" id="threeDayEnergyText">近3天量能：--</div>
+      <div class="summary-grid" id="summaryGrid"></div>
+      <div class="signals-row" id="signalsRow"></div>
+
+      
+      <section class="deep-section" id="deepSection">
+        <h2>深度行情 · Level-2 / 资金 / 筹码 / 龙虎榜</h2>
+        <p class="chart-desc" id="deepNote">--</p>
+        <div class="summary-grid" id="deepSummary"></div>
+
+        <div class="deep-grid">
+          <div class="deep-card">
+            <h3>大单分布（万元）</h3>
+            <div class="chart-wrap chart-echarts" id="largeOrderChart"></div>
+          </div>
+          <div class="deep-card">
+            <h3>筹码分布（主峰）</h3>
+            <div class="chart-wrap chart-echarts" id="chipChart"></div>
+          </div>
+        </div>
+
+        <div class="deep-grid">
+          <div class="deep-card">
+            <h3>逐笔成交（最近）</h3>
+            <div class="table-wrap" id="tickTable"></div>
+          </div>
+          <div class="deep-card">
+            <h3>龙虎榜</h3>
+            <div class="table-wrap" id="lhbTable"></div>
+          </div>
+        </div>
+        <div class="deep-card full">
+          <h3>最新龙虎榜席位</h3>
+          <div class="table-wrap" id="lhbSeats"></div>
+        </div>
+      </section>
+
+      <div class="chart-section">
+        <h2>日内价格走势（分钟级）</h2>
+        <div class="chart-wrap tall"><canvas id="priceChart"></canvas></div>
+      </div>
+
+      <div class="chart-section">
+        <h2>成交额 / 成交量 / 量比</h2>
+        <div class="chart-wrap"><canvas id="volumeChart"></canvas></div>
+      </div>
+
+      <div class="chart-section">
+        <h2>主力净流入（万元）</h2>
+        <div class="chart-wrap"><canvas id="flowChart"></canvas></div>
+      </div>
+
+      <div class="chart-section">
+        <h2>日K 收盘价 & MA</h2>
+        <div class="chart-wrap tall"><canvas id="dailyChart"></canvas></div>
+      </div>
+
+      <div class="chart-section">
+        <h2>换手率 / 量比（0轴以上红·正收益，0轴以下绿·负收益）</h2>
+        <div class="chart-wrap tall chart-echarts" id="turnoverVolumeRatioChart"></div>
+      </div>
+
+      <div class="chart-section">
+        <h2>日级涨跌幅 / 换手率 / 振幅</h2>
+        <p class="chart-desc">上图：涨跌幅柱 + 换手/振幅线 · 下图：气泡越大振幅越高，横轴换手、纵轴涨跌</p>
+        <div class="chart-wrap tall chart-echarts" id="dailyMetricEchart"></div>
+      </div>
+    </main>
+
+    <footer>
+      数据来源：东方财富公开 API · 本地 SQLite 持久化 · 仅供研究参考，不构成投资建议
+    </footer>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
