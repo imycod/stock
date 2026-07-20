@@ -45,34 +45,34 @@ const analysisCache = new Map();
 const deepCache = new Map();
 let lastCollectByCode = {};
 
-async function syncWatchlistFromConfig() {
-  for (const code of config.watchlist || []) {
-    if (!code) continue;
-    if (db.getWatchlistStock(code)) continue;
+async function applyConfigWatchlist() {
+  const entries = stocks.normalizeWatchlist(config.watchlist || []);
+  const defaultCode = stocks.normalizeCode(config.defaultStockCode);
+  if (defaultCode) {
+    const has = entries.some((e) => e.code === defaultCode);
+    if (!has) entries.unshift({ code: defaultCode, name: null });
+  }
+
+  for (const entry of entries) {
     try {
-      const stock = await stocks.resolveStock(code, api);
+      if (entry.name) {
+        db.upsertWatchlistStock(stocks.stockFromParts(entry.code, entry.name, null));
+        continue;
+      }
+      const existing = db.getWatchlistStock(entry.code);
+      if (existing?.name && !stocks.isGarbledStockName(existing.name)) continue;
+      if (existing && existing.name === entry.code) {
+        /* try refresh name below */
+      } else if (existing) continue;
+
+      const stock = await stocks.resolveStock(entry.code, api);
       db.upsertWatchlistStock(stock);
     } catch (e) {
-      console.warn(`[watchlist] config 代码 ${code} 解析失败:`, e.message);
+      console.warn(`[watchlist] ${entry.code}:`, e.message);
     }
   }
 }
 
-async function ensureWatchlistSeeded() {
-  const existing = db.getWatchlist();
-  const codes = new Set(existing.map((r) => r.code));
-  const seed = [...config.watchlist, config.defaultStockCode].filter(Boolean);
-
-  for (const code of seed) {
-    if (codes.has(code)) continue;
-    try {
-      const stock = await stocks.resolveStock(code, api);
-      db.upsertWatchlistStock(stock);
-    } catch (e) {
-      console.warn(`[watchlist] 无法解析 ${code}:`, e.message);
-    }
-  }
-}
 
 async function resolveStockForRequest(req) {
   const raw = req.query.code || req.body?.code || config.defaultStockCode;
@@ -86,8 +86,7 @@ async function resolveStockForRequest(req) {
 }
 
 async function bootstrap() {
-  await ensureWatchlistSeeded();
-  await syncWatchlistFromConfig();
+  await applyConfigWatchlist();
 
   console.log('[init] 同步监控列表历史日K...');
   try {
@@ -122,7 +121,10 @@ app.get('/api/stocks', (req, res) => {
 
 app.post('/api/stocks', async (req, res) => {
   try {
-    const stock = await stocks.resolveStock(req.body?.code, api);
+    const manualName = (req.body?.name || "").trim();
+    const stock = await stocks.resolveStock(req.body?.code, api, {
+      preferredName: manualName || undefined,
+    });
     db.upsertWatchlistStock(stock);
     await collector.syncDailyKlines(stock, 30).catch(() => null);
     await collector.syncTodayMinuteBars(stock).catch(() => null);

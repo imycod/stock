@@ -896,7 +896,9 @@ async function switchStock() {
 
 async function addToWatchlist() {
   const input = document.getElementById('stockCodeInput');
+  const nameInput = document.getElementById('stockNameInput');
   const code = (input?.value || '').trim();
+  const name = (nameInput?.value || '').trim();
   if (!/^[0-9]{6}$/.test(code)) {
     alert('请输入 6 位股票代码');
     return;
@@ -905,7 +907,7 @@ async function addToWatchlist() {
     const res = await fetch('/api/stocks', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code }),
+      body: JSON.stringify({ code, name: name || undefined }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || '加入监控失败');

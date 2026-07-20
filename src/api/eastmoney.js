@@ -1,3 +1,5 @@
+const iconv = require('iconv-lite');
+
 /**
  * 东方财富公开行情 API（无需密钥）
  * 文档参考: push2 / push2his 接口
@@ -27,23 +29,36 @@ async function fetchJson(url, timeoutMs = 8000) {
   return res.json();
 }
 
-async function fetchText(url, headers = HEADERS, timeoutMs = 8000) {
+async function fetchBuffer(url, headers = HEADERS, timeoutMs = 8000) {
   const res = await fetch(url, {
     headers,
     signal: AbortSignal.timeout(timeoutMs),
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}: ${url}`);
-  return res.text();
+  return Buffer.from(await res.arrayBuffer());
+}
+
+async function fetchText(url, headers = HEADERS, timeoutMs = 8000, encoding = "utf8") {
+  const buf = await fetchBuffer(url, headers, timeoutMs);
+  if (encoding === "gbk" || encoding === "gb18030") {
+    return iconv.decode(buf, "gb18030");
+  }
+  return buf.toString("utf8");
 }
 
 /** 新浪实时行情（备用，无需密钥） */
 async function getSinaQuote(code, market = 'SH') {
   const prefix = market === 'SH' ? 'sh' : 'sz';
   const url = `https://hq.sinajs.cn/list=${prefix}${code}`;
-  const text = await fetchText(url, {
-    ...HEADERS,
-    Referer: 'https://finance.sina.com.cn/',
-  });
+  const text = await fetchText(
+    url,
+    {
+      ...HEADERS,
+      Referer: 'https://finance.sina.com.cn/',
+    },
+    8000,
+    'gb18030'
+  );
   const match = text.match(/="([^"]*)"/);
   if (!match || !match[1]) return null;
 
@@ -135,8 +150,43 @@ function parseKline(line) {
   };
 }
 
-/** 实时快照：新浪 → 腾讯 → 东方财富 */
-async function getRealtimeQuote(secid, code = '600759', market = 'SH') {
+async function getEastmoneyQuote(secid) {
+  const fields =
+    "f43,f44,f45,f46,f47,f48,f50,f57,f58,f60,f84,f85,f168,f169,f170,f171,f292";
+  const url = `${BASE_QUOTE}?secid=${secid}&invt=2&fltt=2&fields=${fields}&ut=fa5fd1943c7b386f172d6893dbfba107&_=${Date.now()}`;
+  const json = await fetchJson(url);
+  const d = json.data;
+  if (!d) return null;
+  const scale = d.f43 > 1000 ? 100 : 1;
+  return {
+    code: d.f57,
+    name: d.f58,
+    price: d.f43 / scale,
+    open: d.f46 / scale,
+    high: d.f44 / scale,
+    low: d.f45 / scale,
+    pre_close: d.f60 / scale,
+    volume: d.f47,
+    amount: d.f48,
+    volume_ratio: d.f50 / 100,
+    turnover_rate: d.f168 / 100,
+    change: d.f169 / scale,
+    pct_change: d.f170 / 100,
+    amplitude: d.f171 / 100,
+    pe: d.f84 ? d.f84 / 100 : null,
+    pb: d.f85 ? d.f85 / 100 : null,
+    updated_at: new Date().toISOString(),
+    source: "eastmoney",
+  };
+}
+
+async function getRealtimeQuote(secid, code = "600759", market = "SH") {
+  try {
+    const em = await getEastmoneyQuote(secid);
+    if (em && em.code) return em;
+  } catch (e) {
+    /* fallback */
+  }
   for (const fn of [
     () => getSinaQuote(code, market),
     () => getTencentQuote(code, market),
@@ -144,44 +194,11 @@ async function getRealtimeQuote(secid, code = '600759', market = 'SH') {
     try {
       const q = await fn();
       if (q) return q;
-    } catch {
-      /* try next */
+    } catch (e) {
+      /* next */
     }
   }
-
-  const fields =
-    'f43,f44,f45,f46,f47,f48,f50,f57,f58,f60,f84,f85,f168,f169,f170,f171,f292';
-  const url = `${BASE_QUOTE}?secid=${secid}&fields=${fields}&_=${Date.now()}`;
-  try {
-    const json = await fetchJson(url);
-    const d = json.data;
-    if (!d) throw new Error('empty');
-
-    const scale = d.f43 > 1000 ? 100 : 1;
-
-    return {
-      code: d.f57,
-      name: d.f58,
-      price: d.f43 / scale,
-      open: d.f46 / scale,
-      high: d.f44 / scale,
-      low: d.f45 / scale,
-      pre_close: d.f60 / scale,
-      volume: d.f47,
-      amount: d.f48,
-      volume_ratio: d.f50 / 100,
-      turnover_rate: d.f168 / 100,
-      change: d.f169 / scale,
-      pct_change: d.f170 / 100,
-      amplitude: d.f171 / 100,
-      pe: d.f84 ? d.f84 / 100 : null,
-      pb: d.f85 ? d.f85 / 100 : null,
-      updated_at: new Date().toISOString(),
-      source: 'eastmoney',
-    };
-  } catch {
-    throw new Error('所有行情源均不可用，请检查网络');
-  }
+  throw new Error("所有行情源均不可用，请检查网络");
 }
 
 function marketPrefix(code, market) {
