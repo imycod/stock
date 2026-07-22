@@ -180,19 +180,31 @@ async function syncDragonTiger(stock, limit = 10) {
 async function syncWatchlistDaily(days = 30) {
   const list = db.getWatchlist();
   const out = [];
+  const errors = [];
   for (const row of list) {
-    out.push(await syncDailyKlines(row, days));
+    try {
+      out.push(await syncDailyKlines(row, days));
+    } catch (e) {
+      errors.push({ code: row.code, error: e.message });
+      console.warn(`[sync] 日K ${row.code} 失败:`, e.message);
+    }
   }
-  return out;
+  return { synced: out, errors };
 }
 
 async function syncWatchlistTodayMinutes() {
   const list = db.getWatchlist();
   const out = [];
+  const errors = [];
   for (const row of list) {
-    out.push(await syncTodayMinuteBars(row));
+    try {
+      out.push(await syncTodayMinuteBars(row));
+    } catch (e) {
+      errors.push({ code: row.code, error: e.message });
+      console.warn(`[sync] 分钟K ${row.code} 失败:`, e.message);
+    }
   }
-  return out;
+  return { synced: out, errors };
 }
 
 module.exports = {

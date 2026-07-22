@@ -20,22 +20,43 @@ const FETCH_OPTS = {
   signal: AbortSignal.timeout(8000),
 };
 
-async function fetchJson(url, timeoutMs = 8000) {
-  const res = await fetch(url, {
-    ...FETCH_OPTS,
-    signal: AbortSignal.timeout(timeoutMs),
-  });
-  if (!res.ok) throw new Error(`HTTP ${res.status}: ${url}`);
-  return res.json();
+async function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+async function fetchWithRetry(fn, retries = 2, delayMs = 800) {
+  let lastErr;
+  for (let i = 0; i <= retries; i++) {
+    try {
+      return await fn();
+    } catch (e) {
+      lastErr = e;
+      if (i < retries) await sleep(delayMs * (i + 1));
+    }
+  }
+  throw lastErr;
+}
+
+async function fetchJson(url, timeoutMs = 12000) {
+  return fetchWithRetry(async () => {
+    const res = await fetch(url, {
+      ...FETCH_OPTS,
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${url}`);
+    return res.json();
+  }, 2, 800);
 }
 
 async function fetchBuffer(url, headers = HEADERS, timeoutMs = 8000) {
+  return fetchWithRetry(async () => {
   const res = await fetch(url, {
     headers,
     signal: AbortSignal.timeout(timeoutMs),
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}: ${url}`);
   return Buffer.from(await res.arrayBuffer());
+  }, 2, 800);
 }
 
 async function fetchText(url, headers = HEADERS, timeoutMs = 8000, encoding = "utf8") {

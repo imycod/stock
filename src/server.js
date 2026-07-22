@@ -89,12 +89,16 @@ async function bootstrap() {
   await applyConfigWatchlist();
 
   console.log('[init] 同步监控列表历史日K...');
-  try {
-    await collector.syncWatchlistDaily(30);
-    await collector.syncWatchlistTodayMinutes();
+  const daily = await collector.syncWatchlistDaily(30);
+  const minute = await collector.syncWatchlistTodayMinutes();
+  const errCount =
+    (daily.errors?.length || 0) + (minute.errors?.length || 0);
+  if (errCount === 0) {
     console.log('[init] 历史数据同步完成');
-  } catch (e) {
-    console.warn('[init] 历史同步失败（可稍后重试）', e.message);
+  } else {
+    console.warn(
+      `[init] 历史同步部分失败 ${errCount} 项，成功日K ${daily.synced?.length || 0} 只，可稍后重试或 POST /api/sync/daily`
+    );
   }
 
   console.log('[init] 首次采集...');
@@ -103,15 +107,19 @@ async function bootstrap() {
     lastCollectByCode = Object.fromEntries(
       results.filter((r) => r?.code).map((r) => [r.code, r])
     );
+    const ok = results.filter((r) => r?.ok).length;
+    console.log(`[init] 首次采集完成 ${ok}/${results.length}`);
     const defaultStock = db.getWatchlistStock(config.defaultStockCode);
     if (defaultStock) {
-      analysisCache.set(
-        defaultStock.code,
-        await analyzer.runAnalysis(defaultStock)
-      );
+      analyzer.runAnalysis(defaultStock).then((a) => {
+        analysisCache.set(defaultStock.code, a);
+        console.log('[init] 默认标的分析就绪', defaultStock.code);
+      }).catch((e) => {
+        console.warn('[init] 分析失败（可刷新仪表盘）:', e.message);
+      });
     }
   } catch (e) {
-    console.warn('[init] 首次采集失败（服务仍启动）', e.message);
+    console.warn('[init] 首次采集失败（服务仍启动）:', e.message);
   }
 }
 
@@ -305,16 +313,15 @@ cron.schedule('0 9 * * 1-5', async () => {
 
 const PORT = config.port;
 
-bootstrap().then(() => {
-  app.listen(PORT, () => {
-    console.log('');
-    console.log('========================================');
-    console.log('  多股票行情采集分析 (dev)');
-    console.log(`  仪表盘: http://localhost:${PORT}`);
-    console.log(`  默认代码: ${config.defaultStockCode}`);
-    console.log('========================================');
-    console.log('');
-  });
+app.listen(PORT, () => {
+  console.log('');
+  console.log('========================================');
+  console.log('  多股票行情采集分析 (dev)');
+  console.log(`  仪表盘: http://localhost:${PORT}`);
+  console.log(`  默认代码: ${config.defaultStockCode}`);
+  console.log('========================================');
+  console.log('');
+  bootstrap().catch((e) => console.warn('[init] 后台初始化异常:', e.message));
 });
 
 module.exports = app;
