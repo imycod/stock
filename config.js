@@ -7,6 +7,11 @@ module.exports = {
     { code: '002129', name: 'TCL中环' },
     { code: '601212', name: '白银有色' },
     { code: '601899', name: '紫金矿业' },
+    { code: '600096', name: '云天化' },
+    { code: '600227', name: '赤天化' },
+    { code: '600722', name: '金牛化工' },
+    { code: '601615', name: '明阳智能' },
+    { code: '002738', name: '中矿资源' },
   ],
   benchmark: {
     code: '000001',
@@ -14,8 +19,19 @@ module.exports = {
     secid: '1.000001',
   },
   port: process.env.PORT || 3009,
+  smallPort: process.env.SMALL_PORT || 3010,
   dataDir: './data',
   dbPath: './data/stock.db',
   collectCron: '5 * * * * *',
   dailySyncCron: '5 15 * * 1-5',
+  /** 主板小盘筛选（npm run export:small） */
+  exportSmall: {
+    maxTotalShares: 3e8, // 总股本 < 3亿股
+    maxMarketCap: 9e9, // 总市值 < 90亿元
+    maxHolders: 100000, // 股东户数 < 10万
+    minTop10Ratio: 40, // 前十大持股比例 >= 40%
+    volumeExpandRatio: 1.5,
+    maxPriceVsYearAvg: 1.0,
+    maxPriceVsYearLow: 1.25,
+  },
 };

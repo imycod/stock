@@ -1,0 +1,186 @@
+:root {
+  --bg: #f3f1eb;
+  --card: #fffdf8;
+  --ink: #1d1a16;
+  --muted: #6d655c;
+  --line: #ddd4c6;
+  --accent: #0f6a5a;
+  --accent-2: #b45309;
+  --danger: #b42318;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  color: var(--ink);
+  background:
+    radial-gradient(1000px 420px at 10% -10%, #dceee8 0%, transparent 60%),
+    radial-gradient(900px 380px at 100% 0%, #f7e7d2 0%, transparent 55%),
+    var(--bg);
+  min-height: 100vh;
+}
+.top {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-end;
+  padding: 24px 28px 8px;
+}
+.top h1 { margin: 0; font-size: 28px; letter-spacing: 0.02em; }
+.sub { margin: 6px 0 0; color: var(--muted); font-size: 13px; }
+.top-actions { display: flex; gap: 10px; align-items: center; }
+.tabs {
+  display: flex;
+  gap: 8px;
+  padding: 8px 28px 0;
+  border-bottom: 1px solid var(--line);
+}
+.tab {
+  border: 0;
+  background: transparent;
+  padding: 10px 14px;
+  cursor: pointer;
+  color: var(--muted);
+  border-bottom: 2px solid transparent;
+  font-size: 14px;
+}
+.tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  font-weight: 600;
+}
+main { padding: 16px 28px 40px; }
+.panel { display: none; }
+.panel.active { display: block; }
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: end;
+  margin-bottom: 12px;
+}
+.filters label, .config-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+input, select {
+  min-width: 160px;
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: 8px;
+  padding: 8px 10px;
+  color: var(--ink);
+  font-size: 14px;
+}
+label.check {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  margin-top: 22px;
+}
+label.check input { min-width: auto; }
+.btn {
+  border: 0;
+  background: var(--accent);
+  color: #fff;
+  border-radius: 8px;
+  padding: 9px 14px;
+  cursor: pointer;
+  font-size: 14px;
+}
+.btn:hover { filter: brightness(1.05); }
+.btn-secondary { background: #4b5563; }
+.badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+  background: #e8efeC;
+  color: var(--accent);
+}
+.badge.running { background: #fff4e5; color: var(--accent-2); }
+.badge.error { background: #fee4e2; color: var(--danger); }
+.stats {
+  margin: 8px 0 12px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.table-wrap {
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card);
+  max-height: calc(100vh - 250px);
+}
+table {
+  border-collapse: collapse;
+  width: 100%;
+  min-width: 1400px;
+  font-size: 13px;
+}
+th, td {
+  border-bottom: 1px solid var(--line);
+  padding: 8px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+th {
+  position: sticky;
+  top: 0;
+  background: #f7f3ea;
+  z-index: 1;
+  white-space: nowrap;
+}
+td.clip {
+  max-width: 220px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.stage-盈利阶段 { color: #067647; font-weight: 600; }
+.stage-扭亏阶段 { color: #b54708; font-weight: 600; }
+.stage-亏损阶段, .stage-转亏阶段 { color: #b42318; font-weight: 600; }
+.stage-减亏阶段 { color: #87531a; font-weight: 600; }
+.st-yes { color: var(--danger); font-weight: 600; }
+.config-form {
+  max-width: 920px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 20px;
+}
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 14px;
+}
+.hint { color: var(--muted); font-size: 13px; line-height: 1.6; }
+.form-actions { display: flex; gap: 10px; margin-top: 8px; }
+.loading {
+  position: fixed; inset: 0;
+  background: rgba(29,26,22,.28);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 50;
+}
+.loading.hidden { display: none; }
+.loading-card {
+  background: #fff;
+  border-radius: 12px;
+  padding: 20px 24px;
+  min-width: 240px;
+  text-align: center;
+  box-shadow: 0 10px 40px rgba(0,0,0,.15);
+}
+.spinner {
+  width: 28px; height: 28px; margin: 0 auto 10px;
+  border: 3px solid #dbe5e1;
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }

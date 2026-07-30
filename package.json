@@ -1,16 +1,20 @@
 {
   "name": "stock-analyzer",
   "version": "1.0.0",
-  "description": "分钟级行情采集与趋势分析",
+  "description": "鍒嗛挓绾ц鎯呴噰闆嗕笌瓒嬪娍鍒嗘瀽",
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "collect": "node -e \"require('./src/collector').collectOnce()\""
+    "collect": "node -e \"require('./src/collector').collectOnce()\"",
+    "export:small": "node src/exportSmall.js",
+    "start:small": "node src/serverSmall.js",
+    "small": "node src/serverSmall.js"
   },
   "dependencies": {
     "better-sqlite3": "^11.7.0",
     "express": "^4.21.2",
     "iconv-lite": "^0.7.3",
-    "node-cron": "^3.0.3"
+    "node-cron": "^3.0.3",
+    "xlsx": "^0.18.5"
   }
 }

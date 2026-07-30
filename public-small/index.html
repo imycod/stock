@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>主板小盘筛选</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header class="top">
+    <div>
+      <h1>主板小盘筛选</h1>
+      <p class="sub">独立服务 · 端口 3010 · 与行情看板 3009 隔离</p>
+    </div>
+    <div class="top-actions">
+      <span id="jobStatus" class="badge">空闲</span>
+      <button id="btnRefresh" class="btn">刷新数据</button>
+    </div>
+  </header>
+
+  <nav class="tabs">
+    <button class="tab active" data-tab="result">筛选结果</button>
+    <button class="tab" data-tab="config">配置参数</button>
+  </nav>
+
+  <main>
+    <section id="tab-result" class="panel active">
+      <div class="filters">
+        <label>名称/代码
+          <input id="filterQ" type="search" placeholder="如 603400 / 华之杰" />
+        </label>
+        <label>盈利阶段
+          <select id="filterStage">
+            <option value="">全部</option>
+            <option>盈利阶段</option>
+            <option>扭亏阶段</option>
+            <option>减亏阶段</option>
+            <option>转亏阶段</option>
+            <option>亏损阶段</option>
+            <option>数据不足</option>
+          </select>
+        </label>
+        <label>持股集中度
+          <select id="filterFocus">
+            <option value="">全部</option>
+            <option>非常集中</option>
+            <option>较集中</option>
+            <option>较分散</option>
+            <option>非常分散</option>
+          </select>
+        </label>
+        <button id="btnFilter" class="btn btn-secondary">筛选</button>
+      </div>
+      <div id="stats" class="stats">尚未加载数据。可点「刷新数据」或到「配置参数」保存后重新抓取。</div>
+      <div class="table-wrap">
+        <table id="resultTable">
+          <thead>
+            <tr>
+              <th>代码</th>
+              <th>名称</th>
+              <th>盈利阶段</th>
+              <th>持股集中度</th>
+              <th>股东户数</th>
+              <th>前十大%</th>
+              <th>市值(亿)</th>
+              <th>股本(亿)</th>
+              <th>财务摘要</th>
+              <th>主营产品</th>
+              <th>合作方</th>
+              <th>ST</th>
+              <th>ST实施日</th>
+              <th>ST原因</th>
+              <th>预计摘帽</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="tab-config" class="panel">
+      <form id="configForm" class="config-form">
+        <div class="grid">
+          <label>总股本上限(亿股)<input name="maxTotalSharesYi" type="number" step="0.1" /></label>
+          <label>总市值上限(亿元)<input name="maxMarketCapYi" type="number" step="1" /></label>
+          <label>股东户数上限<input name="maxHolders" type="number" step="1000" /></label>
+          <label>前十大持股下限(%)<input name="minTop10Ratio" type="number" step="1" /></label>
+          <label>量能放大倍数<input name="volumeExpandRatio" type="number" step="0.1" /></label>
+          <label>现价/年内均价上限<input name="maxPriceVsYearAvg" type="number" step="0.05" /></label>
+          <label>现价/年内低点上限<input name="maxPriceVsYearLow" type="number" step="0.05" /></label>
+          <label>换手抬升阈值(%)<input name="turnoverJumpTo" type="number" step="0.1" /></label>
+          <label class="check"><input name="includeST" type="checkbox" /> 包含 ST/*ST</label>
+        </div>
+        <p class="hint">保存后会按新参数重新抓取，并自动回到「筛选结果」。默认包含 ST，并补充 ST 实施日/原因/预计摘帽信息。</p>
+        <div class="form-actions">
+          <button type="submit" class="btn">保存并重新抓取</button>
+          <button type="button" id="btnSaveOnly" class="btn btn-secondary">仅保存参数</button>
+        </div>
+      </form>
+    </section>
+  </main>
+
+  <div id="loading" class="loading hidden">
+    <div class="loading-card">
+      <div class="spinner"></div>
+      <div id="loadingText">正在筛选…</div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
