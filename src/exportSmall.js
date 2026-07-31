@@ -1491,11 +1491,246 @@ async function main() {
   }
 }
 
+
+function matchesCompoundFilters(row, filters = {}) {
+  const stage = String(filters.stage || '').trim();
+  const focus = String(filters.focus || '').trim();
+  const uncapped = filters.uncapped === true || filters.uncapped === 1 || filters.uncapped === '1' || filters.uncapped === 'true';
+  const abnormal = filters.abnormal === true || filters.abnormal === 1 || filters.abnormal === '1' || filters.abnormal === 'true';
+  if (stage && (row.profitStage || '') !== stage) return false;
+  if (focus && (row.holdFocus || '') !== focus) return false;
+  if (uncapped && !row.justUncapped) return false;
+  if (abnormal && !row.hasAbnormal) return false;
+  return true;
+}
+
+function hasCompoundFilters(filters = {}) {
+  const stage = String(filters.stage || '').trim();
+  const focus = String(filters.focus || '').trim();
+  const uncapped = filters.uncapped === true || filters.uncapped === 1 || filters.uncapped === '1' || filters.uncapped === 'true';
+  const abnormal = filters.abnormal === true || filters.abnormal === 1 || filters.abnormal === '1' || filters.abnormal === 'true';
+  return !!(stage || focus || uncapped || abnormal);
+}
+
+/**
+ * 在主板全市场按复合条件远程过滤（盈利阶段/持股集中度/刚摘帽/异动）
+ * 仅拉取条件所需接口，命中后再做完整基本面补全。
+ */
+async function remoteFilter(userFilters = {}, onProgress = () => {}) {
+  const cfg = (require('../config').exportSmall) || {};
+  const opts = { ...DEFAULTS, ...cfg, ...userFilters };
+  const filters = {
+    stage: String(userFilters.stage || '').trim(),
+    focus: String(userFilters.focus || '').trim(),
+    uncapped:
+      userFilters.uncapped === true ||
+      userFilters.uncapped === 1 ||
+      userFilters.uncapped === '1' ||
+      userFilters.uncapped === 'true',
+    abnormal:
+      userFilters.abnormal === true ||
+      userFilters.abnormal === 1 ||
+      userFilters.abnormal === '1' ||
+      userFilters.abnormal === 'true',
+  };
+  if (!hasCompoundFilters(filters)) {
+    throw new Error('请至少选择一个复合条件：盈利阶段 / 持股集中度 / 刚摘帽 / 异动');
+  }
+
+  const maxResults = Math.max(1, Number(userFilters.maxResults || opts.remoteMaxResults || 80));
+  const concurrency = Math.max(2, Number(userFilters.concurrency || opts.concurrency || 6));
+  const progress = (stage, payload = {}) => {
+    try {
+      onProgress(stage, payload);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  progress('clist', { message: '拉取主板列表', done: 0, total: 0 });
+  const marketWeather = await fetchMarketWeather().catch(() => null);
+  const all = await fetchMainBoardList(!!opts.includeST);
+  progress('clist', { message: `主板 ${all.length} 只`, done: all.length, total: all.length, matched: all.length });
+
+  let candidates = all.map((r) => ({ ...r }));
+
+  // 1) 持股集中度：先拉股东户数，大幅缩小范围
+  if (filters.focus) {
+    const matched = [];
+    let done = 0;
+    const onlyFocus = !filters.stage && !filters.uncapped && !filters.abnormal;
+    let stop = false;
+    await mapPool(candidates, concurrency, async (row) => {
+      if (stop) return;
+      try {
+        const h = await fetchHolderInfo(row.code);
+        if (h && h.holdFocus === filters.focus) {
+          matched.push({ ...row, ...h });
+          if (onlyFocus && matched.length >= maxResults) stop = true;
+        }
+      } catch {
+        /* ignore */
+      } finally {
+        done++;
+        if (done % 30 === 0 || done === candidates.length || stop) {
+          progress('holder', {
+            message: `持股集中度扫描 ${Math.min(done, candidates.length)}/${candidates.length}，命中 ${matched.length}`,
+            done: Math.min(done, candidates.length),
+            total: candidates.length,
+            matched: matched.length,
+          });
+        }
+      }
+    });
+    candidates = onlyFocus ? matched.slice(0, maxResults) : matched;
+    progress('holder_done', {
+      message: `集中度「${filters.focus}」命中 ${candidates.length}${onlyFocus && stop ? '（已达上限）' : ''}`,
+      matched: candidates.length,
+      total: all.length,
+    });
+  }
+
+  // 2) 盈利阶段：拉年报净利
+  if (filters.stage && candidates.length) {
+    const matched = [];
+    let done = 0;
+    const total = candidates.length;
+    await mapPool(candidates, Math.min(concurrency, 6), async (row) => {
+      try {
+        const fin = await fetchAnnualFinance(row.code);
+        const next = { ...row, ...fin };
+        if ((next.profitStage || '') === filters.stage) matched.push(next);
+      } catch {
+        /* ignore */
+      } finally {
+        done++;
+        if (done % 20 === 0 || done === total) {
+          progress('finance', {
+            message: `盈利阶段扫描 ${done}/${total}，命中 ${matched.length}`,
+            done,
+            total,
+            matched: matched.length,
+          });
+        }
+      }
+    });
+    candidates = matched;
+    progress('finance_done', {
+      message: `阶段「${filters.stage}」命中 ${candidates.length}`,
+      matched: candidates.length,
+    });
+  }
+
+  // 3) 刚摘帽 / 异动：公告扫描
+  if ((filters.uncapped || filters.abnormal) && candidates.length) {
+    const matched = [];
+    let done = 0;
+    const total = candidates.length;
+    await mapPool(candidates, Math.min(concurrency, 5), async (row) => {
+      try {
+        const ann = await fetchAnnExtras(row.code, row.name);
+        const next = { ...row, ...ann };
+        let ok = true;
+        if (filters.uncapped && !next.justUncapped) ok = false;
+        if (filters.abnormal && !next.hasAbnormal) ok = false;
+        if (ok) matched.push(next);
+      } catch {
+        /* ignore */
+      } finally {
+        done++;
+        if (done % 15 === 0 || done === total) {
+          progress('ann', {
+            message: `公告扫描 ${done}/${total}，命中 ${matched.length}`,
+            done,
+            total,
+            matched: matched.length,
+          });
+        }
+      }
+    });
+    candidates = matched;
+    progress('ann_done', {
+      message: `公告条件命中 ${candidates.length}`,
+      matched: candidates.length,
+    });
+  }
+
+  // 若未拉过股东但展示需要，后面 enrich 会补；先截断上限
+  const limited = candidates.slice(0, maxResults);
+  progress('fundamentals', {
+    message: `补全展示字段 ${limited.length} 只`,
+    done: 0,
+    total: limited.length,
+  });
+
+  const enriched = [];
+  let fDone = 0;
+  await mapPool(limited, Math.min(4, concurrency), async (row) => {
+    try {
+      // 缺股东时补一下，便于表格展示
+      let base = row;
+      if (base.holderNum == null) {
+        const h = await fetchHolderInfo(row.code).catch(() => null);
+        if (h) base = { ...base, ...h };
+      }
+      if (!base.profitStage && !filters.stage) {
+        const fin = await fetchAnnualFinance(row.code).catch(() => ({}));
+        base = { ...base, ...fin };
+      }
+      if (base.hasAbnormal == null && !filters.uncapped && !filters.abnormal) {
+        const ann = await fetchAnnExtras(row.code, row.name).catch(() => ({}));
+        base = { ...base, ...ann };
+      }
+      const full = await enrichFundamentals(base);
+      if (matchesCompoundFilters(full, filters)) enriched.push(full);
+    } catch {
+      if (matchesCompoundFilters(row, filters)) enriched.push(row);
+    } finally {
+      fDone++;
+      if (fDone % 5 === 0 || fDone === limited.length) {
+        progress('fundamentals', {
+          message: `补全 ${fDone}/${limited.length}`,
+          done: fDone,
+          total: limited.length,
+          matched: enriched.length,
+        });
+      }
+    }
+  });
+
+  return {
+    rows: enriched,
+    market: marketWeather,
+    filters,
+    stats: {
+      mainBoard: all.length,
+      afterFilter: enriched.length,
+      scanned: all.length,
+      truncated: candidates.length > maxResults,
+      maxResults,
+      stageCount: enriched.reduce((acc, r) => {
+        const k = r.profitStage || '数据不足';
+        acc[k] = (acc[k] || 0) + 1;
+        return acc;
+      }, {}),
+    },
+    opts: {
+      includeST: !!opts.includeST,
+      maxResults,
+    },
+    generatedAt: new Date().toISOString(),
+    source: 'remote-filter',
+  };
+}
+
 module.exports = {
   DEFAULTS,
   YI,
   runScreen,
   lookupStock,
+  remoteFilter,
+  hasCompoundFilters,
+  matchesCompoundFilters,
   resolveOptions,
   buildExcelRows,
   writeExcel,

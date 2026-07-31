@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const express = require('express');
 const config = require('../config');
-const { DEFAULTS, YI, runScreen, lookupStock } = require('./exportSmall');
+const { DEFAULTS, YI, runScreen, lookupStock, remoteFilter, hasCompoundFilters } = require('./exportSmall');
 const smallDb = require('./storage/smallDatabase');
 const smallCollector = require('./smallCollector');
 const { stockFromParts } = require('./stocks');
@@ -10,6 +10,7 @@ const { stockFromParts } = require('./stocks');
 const PORT = Number(process.env.SMALL_PORT || config.smallPort || 3010);
 const RUNTIME_PATH = path.join(__dirname, '..', 'data', 'exportSmall.runtime.json');
 const RESULT_PATH = path.join(__dirname, '..', 'data', 'exports', 'small-screen-latest.json');
+const FILTER_RESULT_PATH = path.join(__dirname, '..', 'data', 'exports', 'small-remote-filter-latest.json');
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
@@ -23,7 +24,9 @@ let job = {
   finishedAt: null,
 };
 let lastResult = null;
+let lastFilterResult = null;
 let runningPromise = null;
+let jobKind = 'screen'; // screen | remote-filter
 
 function loadRuntimeConfig() {
   const base = { ...DEFAULTS, ...(config.exportSmall || {}) };
@@ -98,6 +101,21 @@ function persistResult(result) {
   fs.writeFileSync(RESULT_PATH, JSON.stringify(result), 'utf8');
 }
 
+function persistFilterResult(result) {
+  fs.mkdirSync(path.dirname(FILTER_RESULT_PATH), { recursive: true });
+  fs.writeFileSync(FILTER_RESULT_PATH, JSON.stringify(result), 'utf8');
+}
+
+function loadCachedFilterResult() {
+  try {
+    if (fs.existsSync(FILTER_RESULT_PATH)) {
+      lastFilterResult = JSON.parse(fs.readFileSync(FILTER_RESULT_PATH, 'utf8'));
+    }
+  } catch {
+    lastFilterResult = null;
+  }
+}
+
 function mapRow(r) {
   return {
     code: r.code,
@@ -168,6 +186,72 @@ function publicLiveConfig() {
     collectOutsideHours: o.collectOutsideHours,
     dbPath: smallDb.dbPath(),
   };
+}
+
+
+async function startRemoteFilter(filters) {
+  if (job.status === 'running') {
+    return { ok: false, error: 'busy' };
+  }
+  if (!hasCompoundFilters(filters || {})) {
+    return { ok: false, error: '需要至少一个复合条件' };
+  }
+  jobKind = 'remote-filter';
+  job = {
+    status: 'running',
+    progress: { stage: 'start', message: '开始远程复合过滤', done: 0, total: 0 },
+    error: null,
+    startedAt: new Date().toISOString(),
+    finishedAt: null,
+  };
+
+  const cfg = loadRuntimeConfig();
+  runningPromise = (async () => {
+    try {
+      const result = await remoteFilter(
+        {
+          ...filters,
+          includeST: cfg.includeST !== false,
+          maxResults: Number(filters.maxResults || DEFAULTS.remoteMaxResults || 80),
+        },
+        (stage, payload = {}) => {
+          job.progress = {
+            stage,
+            message: payload.message || stage,
+            done: payload.done || 0,
+            total: payload.total || payload.matched || 0,
+          };
+        }
+      );
+      lastFilterResult = {
+        ...result,
+        market: result.market || null,
+        rows: result.rows.map(mapRow),
+      };
+      persistFilterResult(lastFilterResult);
+      try {
+        trackScreenRows(lastFilterResult.rows);
+      } catch (e) {
+        console.warn('[small-live] track filter failed:', e.message || e);
+      }
+      job.status = 'done';
+      job.finishedAt = new Date().toISOString();
+      job.progress = {
+        stage: 'done',
+        message: '远程过滤完成 ' + lastFilterResult.rows.length + ' 只',
+        done: lastFilterResult.rows.length,
+        total: lastFilterResult.rows.length,
+      };
+    } catch (e) {
+      job.status = 'error';
+      job.error = e.message || String(e);
+      job.finishedAt = new Date().toISOString();
+    } finally {
+      runningPromise = null;
+    }
+  })();
+
+  return { ok: true };
 }
 
 async function startScreen(opts) {
@@ -269,6 +353,7 @@ app.get('/api/screen/status', (_req, res) => {
     ok: true,
     job: {
       status: job.status,
+      kind: jobKind,
       progress: job.progress,
       error: job.error,
       startedAt: job.startedAt,
@@ -276,9 +361,61 @@ app.get('/api/screen/status', (_req, res) => {
     },
     hasResult: !!lastResult,
     resultCount: lastResult?.rows?.length || 0,
+    hasFilterResult: !!lastFilterResult,
+    filterResultCount: lastFilterResult?.rows?.length || 0,
   });
 });
 
+
+
+app.post('/api/screen/remote-filter', async (req, res) => {
+  const body = req.body || {};
+  const filters = {
+    stage: String(body.stage || '').trim(),
+    focus: String(body.focus || '').trim(),
+    uncapped: body.uncapped,
+    abnormal: body.abnormal,
+    maxResults: body.maxResults,
+  };
+  if (!hasCompoundFilters(filters)) {
+    return res.status(400).json({ ok: false, error: '请至少选择盈利阶段/持股集中度/刚摘帽/异动之一' });
+  }
+  const run = await startRemoteFilter(filters);
+  if (!run.ok) {
+    return res.status(run.error === 'busy' ? 409 : 400).json({
+      ok: false,
+      error: run.error === 'busy' ? '任务进行中，请稍后' : run.error,
+    });
+  }
+  res.json({ ok: true, job: { status: job.status, kind: jobKind, progress: job.progress } });
+});
+
+app.get('/api/screen/remote-result', (req, res) => {
+  if (!lastFilterResult) {
+    return res.json({ ok: true, empty: true, source: 'remote-filter', rows: [], stats: null });
+  }
+  let rows = lastFilterResult.rows || [];
+  const stage = String(req.query.stage || '').trim();
+  const focus = String(req.query.focus || '').trim();
+  const uncapped = String(req.query.uncapped || '').trim();
+  const abnormal = String(req.query.abnormal || '').trim();
+  if (stage) rows = rows.filter((r) => r.profitStage === stage);
+  if (focus) rows = rows.filter((r) => r.holdFocus === focus);
+  if (uncapped === '1' || uncapped === 'true') rows = rows.filter((r) => r.justUncapped);
+  if (abnormal === '1' || abnormal === 'true') rows = rows.filter((r) => r.hasAbnormal);
+  res.json({
+    ok: true,
+    empty: false,
+    source: 'remote-filter',
+    generatedAt: lastFilterResult.generatedAt,
+    stats: lastFilterResult.stats,
+    market: lastFilterResult.market || null,
+    filters: lastFilterResult.filters || null,
+    rows,
+    total: rows.length,
+    allTotal: (lastFilterResult.rows || []).length,
+  });
+});
 
 app.get('/api/stock/lookup', async (req, res) => {
   const q = String(req.query.q || '').trim();
@@ -327,7 +464,22 @@ app.get('/api/stock/lookup', async (req, res) => {
 
 app.get('/api/screen/result', (req, res) => {
   if (!lastResult) {
-    return res.json({ ok: true, empty: true, rows: [], stats: null, opts: publicConfig(loadRuntimeConfig()) });
+    const compoundEmpty = {
+      stage: String(req.query.stage || '').trim(),
+      focus: String(req.query.focus || '').trim(),
+      uncapped: String(req.query.uncapped || '').trim(),
+      abnormal: String(req.query.abnormal || '').trim(),
+    };
+    return res.json({
+      ok: true,
+      empty: true,
+      source: 'cache',
+      rows: [],
+      stats: null,
+      opts: publicConfig(loadRuntimeConfig()),
+      suggestRemote: hasCompoundFilters(compoundEmpty),
+      compound: compoundEmpty,
+    });
   }
   const q = String(req.query.q || '').trim().toLowerCase();
   const stage = String(req.query.stage || '').trim();
@@ -351,9 +503,16 @@ app.get('/api/screen/result', (req, res) => {
     uncapLabel: r.uncapLabel || (r.justUncapped ? '刚摘帽' : r.uncapDate ? '曾摘帽' : ''),
   }));
 
+  const compound = {
+    stage,
+    focus,
+    uncapped: uncapped === '1' || uncapped === 'true',
+    abnormal: abnormal === '1' || abnormal === 'true',
+  };
   res.json({
     ok: true,
     empty: false,
+    source: 'cache',
     generatedAt: lastResult.generatedAt,
     stats: lastResult.stats,
     market: lastResult.market || null,
@@ -361,6 +520,8 @@ app.get('/api/screen/result', (req, res) => {
     rows,
     total: rows.length,
     allTotal: lastResult.rows.length,
+    suggestRemote: rows.length === 0 && hasCompoundFilters(compound),
+    compound,
   });
 });
 

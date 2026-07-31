@@ -259,6 +259,66 @@ function renderRows(rows) {
     .join('');
 }
 
+
+function readCompoundFilters() {
+  return {
+    stage: $('#filterStage').value.trim(),
+    focus: $('#filterFocus').value.trim(),
+    uncapped: $('#filterUncapped').value,
+    abnormal: $('#filterAbnormal').value,
+  };
+}
+
+function hasCompoundFiltersClient(f) {
+  return !!(f.stage || f.focus || f.uncapped === '1' || f.abnormal === '1');
+}
+
+async function runRemoteFilterAndShow() {
+  const f = readCompoundFilters();
+  if (!hasCompoundFiltersClient(f)) {
+    throw new Error('请先选择盈利阶段/持股集中度/刚摘帽/异动');
+  }
+  setLoading(true, '本地无命中，正在远程扫描主板…');
+  setBadge('running', '远程过滤');
+  await api('/api/screen/remote-filter', {
+    method: 'POST',
+    body: JSON.stringify({
+      stage: f.stage,
+      focus: f.focus,
+      uncapped: f.uncapped,
+      abnormal: f.abnormal,
+    }),
+  });
+  await pollUntilDone();
+  const params = new URLSearchParams();
+  if (f.stage) params.set('stage', f.stage);
+  if (f.focus) params.set('focus', f.focus);
+  if (f.uncapped) params.set('uncapped', f.uncapped);
+  if (f.abnormal) params.set('abnormal', f.abnormal);
+  const data = await api('/api/screen/remote-result?' + params.toString());
+  renderMarket(data.market);
+  if (data.empty || !(data.rows || []).length) {
+    $('#stats').textContent = '远程扫描主板后仍无匹配结果';
+    renderRows([]);
+    setBadge('idle', '远程无命中');
+    return data;
+  }
+  const st = data.stats || {};
+  $('#stats').textContent =
+    '远程主板过滤 ' +
+    data.total +
+    '/' +
+    (data.allTotal || data.total) +
+    ' 只 · 扫描主板约 ' +
+    (st.mainBoard || '?') +
+    ' · ' +
+    new Date(data.generatedAt).toLocaleString('zh-CN') +
+    (st.truncated ? ' · 已截断至上限' : '');
+  renderRows(data.rows);
+  setBadge('idle', '远程过滤');
+  return data;
+}
+
 async function loadResult() {
   const q = $('#filterQ').value.trim();
   const stage = $('#filterStage').value;
@@ -304,6 +364,16 @@ async function loadResult() {
   if (abnormal) params.set('abnormal', abnormal);
   const data = await api('/api/screen/result?' + params.toString());
   renderMarket(data.market);
+
+  const compound = { stage, focus, uncapped, abnormal };
+  const needRemote =
+    data.suggestRemote ||
+    ((data.empty || !(data.rows || []).length) && hasCompoundFiltersClient(compound));
+
+  if (needRemote) {
+    return runRemoteFilterAndShow();
+  }
+
   if (data.empty) {
     $('#stats').textContent = '尚无缓存结果，请点击「刷新数据」开始抓取。';
     renderRows([]);
@@ -316,7 +386,7 @@ async function loadResult() {
   const uncapN = (data.rows || []).filter((r) => r.justUncapped).length;
   const abnN = (data.rows || []).filter((r) => r.hasAbnormal).length;
   $('#stats').textContent =
-    '共 ' +
+    '本地筛选 ' +
     data.total +
     '/' +
     data.allTotal +
@@ -331,22 +401,24 @@ async function loadResult() {
     ' · ' +
     stages;
   renderRows(data.rows);
+  setBadge('idle', '本地筛选');
   return data;
 }
 
 async function pollUntilDone() {
-  setLoading(true, '正在筛选…');
-  setBadge('running', '筛选中');
+  setLoading(true, '处理中…');
+  setBadge('running', '处理中');
   if (state.polling) clearInterval(state.polling);
   return new Promise((resolve, reject) => {
     state.polling = setInterval(async () => {
       try {
         const s = await api('/api/screen/status');
         const p = s.job.progress || {};
-        const msg = p.message || p.stage || '筛选中';
-        const prog = p.total > 0 ? ` ${p.done || 0}/${p.total}` : '';
+        const msg = p.message || p.stage || '处理中';
+        const prog = p.total > 0 ? ' ' + (p.done || 0) + '/' + p.total : '';
+        const kind = s.job.kind === 'remote-filter' ? '远程过滤' : '筛选中';
         setLoading(true, msg + prog);
-        setBadge('running', '筛选中');
+        setBadge('running', kind);
         if (s.job.status === 'done') {
           clearInterval(state.polling);
           state.polling = null;
