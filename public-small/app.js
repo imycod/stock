@@ -1,6 +1,6 @@
 const $ = (s) => document.querySelector(s);
 
-const state = { polling: null, liveCode: null, liveTimer: null, liveIntervalSec: 60, liveRows: [], liveExpand: {}, favoriteCodes: new Set(), favRows: [] };
+const state = { polling: null, liveCode: null, liveTimer: null, liveListTimer: null, liveIntervalSec: 60, liveRows: [], liveExpand: {}, favoriteCodes: new Set(), favRows: [] };
 
 function showTab(name) {
   document.querySelectorAll('.tab').forEach((el) => {
@@ -412,9 +412,33 @@ function renderLiveWatchTable(rows) {
 }
 
 
+
+function stopLiveListAutoRefresh() {
+  if (state.liveListTimer) {
+    clearInterval(state.liveListTimer);
+    state.liveListTimer = null;
+  }
+}
+
+function startLiveListAutoRefresh() {
+  stopLiveListAutoRefresh();
+  const sec = Math.max(15, Number(state.liveIntervalSec) || 60);
+  state.liveListTimer = setInterval(function () {
+    loadLiveWatchlist().catch(function () {});
+    if (state.liveCode) refreshLive(state.liveCode).catch(function () {});
+  }, sec * 1000);
+}
 async function loadLiveWatchlist() {
   const data = await api('/api/live/watchlist');
-  if (data.config?.pollIntervalSec) state.liveIntervalSec = data.config.pollIntervalSec;
+  if (data.config?.pollIntervalSec) {
+    const next = Number(data.config.pollIntervalSec);
+    if (next && next !== state.liveIntervalSec) {
+      state.liveIntervalSec = next;
+      startLiveListAutoRefresh();
+    } else {
+      state.liveIntervalSec = next || state.liveIntervalSec;
+    }
+  }
   const st = await api('/api/live/status');
   const p = st.poll || {};
   state.liveRows = data.rows || [];
@@ -422,7 +446,8 @@ async function loadLiveWatchlist() {
     '间隔 ' + state.liveIntervalSec + 's · 监控 ' + (p.stats?.watchCount ?? state.liveRows.length) +
     ' 只 · 快照 ' + (p.stats?.snapCount ?? '-') +
     ' · 交易时段 ' + (p.trading ? '是' : '否') +
-    (p.finishedAt ? ' · 上次 ' + new Date(p.finishedAt).toLocaleTimeString('zh-CN') : '');
+    (p.finishedAt ? ' · 上次 ' + new Date(p.finishedAt).toLocaleTimeString('zh-CN') : '') +
+    ' · 每' + state.liveIntervalSec + 's 自动刷新';
   applyLiveFilter();
   return data;
 }
@@ -958,6 +983,8 @@ async function init() {
   const cfg = await api('/api/config');
   fillConfigForm(cfg.config);
   if (cfg.liveConfig?.pollIntervalSec) state.liveIntervalSec = cfg.liveConfig.pollIntervalSec;
+  startLiveListAutoRefresh();
+  loadLiveWatchlist().catch(function () {});
   if ($('#liveConfigHint') && cfg.liveConfig) {
     $('#liveConfigHint').textContent =
       '实时监控: 每 ' + cfg.liveConfig.pollIntervalSec + ' 秒采集一次（config.smallLive.pollIntervalSec / 环境变量 SMALL_POLL_SEC），入库 ' + (cfg.liveConfig.dbPath || 'data/small-live.db');
