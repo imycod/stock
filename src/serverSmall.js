@@ -6,6 +6,8 @@ const { DEFAULTS, YI, runScreen, lookupStock, remoteFilter, hasCompoundFilters }
 const smallDb = require('./storage/smallDatabase');
 const smallCollector = require('./smallCollector');
 const { stockFromParts } = require('./stocks');
+const { publicAiConfig, chatCompletions } = require('./ai/zhipu');
+const { buildSnapshotContext, systemPrompt } = require('./ai/analyzeContext');
 
 const PORT = Number(process.env.SMALL_PORT || config.smallPort || 3010);
 const RUNTIME_PATH = path.join(__dirname, '..', 'data', 'exportSmall.runtime.json');
@@ -574,6 +576,79 @@ app.delete('/api/favorites/:code', (req, res) => {
     res.json({ ok: true, codes: smallDb.getFavoriteCodes() });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message || String(e) });
+  }
+});
+
+
+app.get('/api/ai/config', (_req, res) => {
+  res.json({ ok: true, ...publicAiConfig() });
+});
+
+app.post('/api/ai/chat', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const code = String(body.code || '').trim();
+    if (!/^\d{6}$/.test(code)) {
+      return res.status(400).json({ ok: false, error: '无效股票代码' });
+    }
+    const days = body.days;
+    const question = String(body.question || body.prompt || '').trim();
+    if (!question) {
+      return res.status(400).json({ ok: false, error: '请输入分析问题' });
+    }
+    const history = Array.isArray(body.messages) ? body.messages : [];
+    const ctx = buildSnapshotContext(code, days);
+    if (!ctx.meta.rowCount) {
+      return res.status(400).json({
+        ok: false,
+        error: '该股票暂无分钟快照，请先纳入实时监控并等待采集',
+        meta: ctx.meta,
+      });
+    }
+
+    const messages = [
+      { role: 'system', content: systemPrompt() },
+      {
+        role: 'user',
+        content:
+          '以下是供分析的分钟快照数据（CSV）。后续问题都基于这份数据，除非用户更换天数后重新发送。\n\n' +
+          ctx.text,
+      },
+      {
+        role: 'assistant',
+        content:
+          '已收到 ' +
+          ctx.meta.code +
+          ' ' +
+          ctx.meta.name +
+          ' 近 ' +
+          ctx.meta.days +
+          ' 日共 ' +
+          ctx.meta.rowCount +
+          ' 条分钟数据。请提出你的分析问题。',
+      },
+    ];
+
+    for (const m of history.slice(-12)) {
+      const role = m.role === 'assistant' ? 'assistant' : 'user';
+      const content = String(m.content || '').trim();
+      if (!content) continue;
+      messages.push({ role, content });
+    }
+    messages.push({ role: 'user', content: question });
+
+    const result = await chatCompletions({ messages });
+    res.json({
+      ok: true,
+      answer: result.content,
+      reasoning: result.reasoning || '',
+      model: result.model,
+      usage: result.usage,
+      meta: ctx.meta,
+    });
+  } catch (e) {
+    const status = e.code === 'AI_NOT_CONFIGURED' ? 503 : 500;
+    res.status(status).json({ ok: false, error: e.message || String(e) });
   }
 });
 

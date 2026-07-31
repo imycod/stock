@@ -130,7 +130,7 @@
                 <th></th><th>代码</th><th>名称</th><th>来源</th><th>最新价</th><th>涨跌%</th>
                 <th>成交量</th><th>成交额</th><th>换手%</th><th>量比</th>
                 <th>主力净流入</th><th>主动买</th><th>主动卖</th><th>主买</th><th>主卖</th>
-                <th>时间</th>
+                <th>时间</th><th>分析</th>
               </tr>
             </thead>
             <tbody></tbody>
@@ -189,5 +189,32 @@
   </div>
 
   <script src="/app.js"></script>
+
+  <div id="aiModal" class="modal hidden">
+    <div class="modal-backdrop" data-close="1"></div>
+    <div class="modal-card ai-modal-card">
+      <div class="modal-head">
+        <div>
+          <strong id="aiModalTitle">AI 分析</strong>
+          <div id="aiModalSub" class="muted"></div>
+        </div>
+        <button type="button" class="btn btn-secondary btn-sm" id="btnAiClose">关闭</button>
+      </div>
+      <div class="ai-config">
+        <label>提供给模型的天数
+          <input id="aiDays" type="number" min="1" max="10" value="5" />
+        </label>
+        <span id="aiModelHint" class="muted"></span>
+        <span id="aiKeyHint" class="muted"></span>
+      </div>
+      <div id="aiPresets" class="ai-presets"></div>
+      <div id="aiChat" class="ai-chat"></div>
+      <div class="ai-input-row">
+        <textarea id="aiInput" rows="2" placeholder="例如：分析主力意图 / 今天是出货还是洗盘？"></textarea>
+        <button type="button" class="btn" id="btnAiSend">发送</button>
+      </div>
+    </div>
+  </div>
+
 </body>
 </html>

@@ -1,6 +1,6 @@
 const $ = (s) => document.querySelector(s);
 
-const state = { polling: null, liveCode: null, liveTimer: null, liveListTimer: null, liveIntervalSec: 60, liveRows: [], liveExpand: {}, favoriteCodes: new Set(), favRows: [] };
+const state = { polling: null, liveCode: null, liveTimer: null, liveListTimer: null, liveIntervalSec: 60, liveRows: [], liveExpand: {}, favoriteCodes: new Set(), favRows: [], aiConfig: null, aiSession: null, aiBound: false };
 
 function showTab(name) {
   document.querySelectorAll('.tab').forEach((el) => {
@@ -300,6 +300,13 @@ async function toggleLiveDay(code, tradeDate) {
 }
 
 function bindLiveExpandEvents(tbody) {
+  tbody.querySelectorAll('.btn-ai').forEach(function (btn) {
+    btn.addEventListener('click', function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      openAiModal(btn.getAttribute('data-code'), btn.getAttribute('data-name'));
+    });
+  });
   tbody.querySelectorAll('.live-expand').forEach(function (btn) {
     btn.addEventListener('click', function (e) {
       e.preventDefault();
@@ -323,7 +330,7 @@ function renderLiveWatchTable(rows) {
     const tip = hasAll
       ? '无匹配监控标的，请调整名称/代码筛选'
       : '监控列表为空。检索股票或运行筛选后会自动加入。';
-    tbody.innerHTML = '<tr><td colspan="16">' + tip + '</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="17">' + tip + '</td></tr>';
     return;
   }
   tbody.innerHTML = rows
@@ -393,6 +400,11 @@ function renderLiveWatchTable(rows) {
         '<td>' +
         escapeHtml((L.tradeDate || '') + ' ' + (L.tradeTime || '')) +
         '</td>' +
+        '<td><button type="button" class="btn btn-secondary btn-sm btn-ai" data-code="' +
+        escapeHtml(w.code) +
+        '" data-name="' +
+        escapeHtml(w.name || '') +
+        '">分析</button></td>' +
         '</tr>';
       if (!open) return main;
       const detailInner = exp.loading
@@ -402,7 +414,7 @@ function renderLiveWatchTable(rows) {
         '<tr class="live-detail-row" data-code="' +
         escapeHtml(w.code) +
         '">' +
-        '<td colspan="16">' +
+        '<td colspan="17">' +
         detailInner +
         '</td></tr>';
       return main + detail;
@@ -411,6 +423,147 @@ function renderLiveWatchTable(rows) {
   bindLiveExpandEvents(tbody);
 }
 
+
+
+﻿async function loadAiConfig() {
+  try {
+    const data = await api('/api/ai/config');
+    state.aiConfig = data;
+    return data;
+  } catch (e) {
+    state.aiConfig = { configured: false, presets: [], defaultDays: 5, maxDays: 10, model: '' };
+    return state.aiConfig;
+  }
+}
+
+function appendAiMsg(role, content) {
+  const box = $('#aiChat');
+  if (!box) return;
+  const div = document.createElement('div');
+  div.className = 'ai-msg ' + role;
+  div.textContent = content;
+  box.appendChild(div);
+  box.scrollTop = box.scrollHeight;
+}
+
+function renderAiPresets() {
+  const wrap = $('#aiPresets');
+  if (!wrap) return;
+  const presets = (state.aiConfig && state.aiConfig.presets) || [];
+  wrap.innerHTML = presets
+    .map(function (p, i) {
+      return '<button type="button" data-preset="' + i + '">' + escapeHtml(p) + '</button>';
+    })
+    .join('');
+  wrap.querySelectorAll('button').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      const idx = Number(btn.getAttribute('data-preset'));
+      const text = presets[idx];
+      if ($('#aiInput')) $('#aiInput').value = text;
+      sendAiChat(text).catch(alert);
+    });
+  });
+}
+
+function openAiModal(code, name) {
+  state.aiSession = { code: code, name: name || '', messages: [] };
+  const modal = $('#aiModal');
+  if (!modal) return;
+  modal.classList.remove('hidden');
+  $('#aiModalTitle').textContent = 'AI 分析 · ' + code + ' ' + (name || '');
+  const cfg = state.aiConfig || {};
+  $('#aiModalSub').textContent = '基于实时监控入库的分钟快照，与模型多轮对话';
+  $('#aiModelHint').textContent = '模型: ' + (cfg.model || 'glm-4.7-flash');
+  $('#aiKeyHint').textContent = cfg.configured
+    ? 'API Key 已配置'
+    : '未配置 ZHIPU_API_KEY，发送前请先在环境变量或 config.ai.apiKey 中设置';
+  $('#aiKeyHint').style.color = cfg.configured ? '' : 'var(--danger)';
+  const days = cfg.defaultDays || 5;
+  if ($('#aiDays')) $('#aiDays').value = days;
+  $('#aiChat').innerHTML = '';
+  appendAiMsg(
+    'system',
+    '选择天数后，可点快捷问题或自己输入。每次提问都会附带该股近 N 日分钟数据给模型。'
+  );
+  renderAiPresets();
+  if ($('#aiInput')) {
+    $('#aiInput').value = '';
+    $('#aiInput').focus();
+  }
+}
+
+function closeAiModal() {
+  const modal = $('#aiModal');
+  if (modal) modal.classList.add('hidden');
+}
+
+async function sendAiChat(questionOverride) {
+  const session = state.aiSession;
+  if (!session || !session.code) return;
+  const question = String(questionOverride || ($('#aiInput') && $('#aiInput').value) || '').trim();
+  if (!question) return alert('请输入问题');
+  const days = Number(($('#aiDays') && $('#aiDays').value) || (state.aiConfig && state.aiConfig.defaultDays) || 5);
+  appendAiMsg('user', question);
+  if ($('#aiInput')) $('#aiInput').value = '';
+  const loading = document.createElement('div');
+  loading.className = 'ai-msg system';
+  loading.textContent = '分析中…（附带近 ' + days + ' 日分钟数据）';
+  $('#aiChat').appendChild(loading);
+
+  try {
+    const data = await api('/api/ai/chat', {
+      method: 'POST',
+      body: JSON.stringify({
+        code: session.code,
+        days: days,
+        question: question,
+        messages: session.messages,
+      }),
+    });
+    loading.remove();
+    session.messages.push({ role: 'user', content: question });
+    session.messages.push({ role: 'assistant', content: data.answer || '' });
+    appendAiMsg('assistant', data.answer || '(空回复)');
+    if (data.meta) {
+      appendAiMsg(
+        'system',
+        '本次上下文: ' +
+          (data.meta.dateList || []).join(', ') +
+          ' · ' +
+          data.meta.rowCount +
+          ' 条' +
+          (data.meta.truncated ? '（已截断）' : '')
+      );
+    }
+  } catch (e) {
+    loading.textContent = '失败: ' + (e.message || e);
+  }
+}
+
+function bindAiModalEvents() {
+  if (state.aiBound) return;
+  state.aiBound = true;
+  if ($('#btnAiClose')) $('#btnAiClose').addEventListener('click', closeAiModal);
+  const modal = $('#aiModal');
+  if (modal) {
+    modal.addEventListener('click', function (e) {
+      if (e.target && e.target.getAttribute('data-close') === '1') closeAiModal();
+    });
+  }
+  if ($('#btnAiSend')) {
+    $('#btnAiSend').addEventListener('click', function () {
+      sendAiChat().catch(alert);
+    });
+  }
+  if ($('#aiInput')) {
+    $('#aiInput').addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendAiChat().catch(alert);
+      }
+    });
+  }
+}
 
 
 function stopLiveListAutoRefresh() {
