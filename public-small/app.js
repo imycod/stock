@@ -1,6 +1,6 @@
 const $ = (s) => document.querySelector(s);
 
-const state = { polling: null };
+const state = { polling: null, liveCode: null, liveTimer: null, liveIntervalSec: 60 };
 
 function showTab(name) {
   document.querySelectorAll('.tab').forEach((el) => {
@@ -34,6 +34,125 @@ function escapeHtml(s) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
 }
+
+function fmtAmt(n) {
+  if (n == null || n === '' || Number.isNaN(Number(n))) return '';
+  const v = Number(n);
+  const abs = Math.abs(v);
+  if (abs >= 1e8) return (v / 1e8).toFixed(2) + '亿';
+  if (abs >= 1e4) return (v / 1e4).toFixed(2) + '万';
+  return v.toFixed(0);
+}
+
+function metric(label, value, cls) {
+  return '<div class="m"><span class="k">' + escapeHtml(label) + '</span><span class="v ' + (cls || '') + '">' + escapeHtml(value) + '</span></div>';
+}
+
+function renderLiveBox(live, lhb, metaText) {
+  const box = $('#liveBox');
+  if (!box) return;
+  if (!live) {
+    box.classList.add('hidden');
+    return;
+  }
+  box.classList.remove('hidden');
+  $('#liveTitle').textContent = (live.code || '') + ' ' + (live.name || '') + ' · 实时指标';
+  $('#liveMeta').textContent = metaText || ((live.tradeDate || '') + ' ' + (live.tradeTime || ''));
+  const pct = live.pctChange;
+  const pctCls = pct > 0 ? 'up' : pct < 0 ? 'down' : '';
+  const pctText = pct == null ? '' : ((pct > 0 ? '+' : '') + fmt(pct, 2) + '%');
+  $('#liveMetrics').innerHTML = [
+    metric('最新价', fmt(live.price, 2), pctCls),
+    metric('涨跌幅', pctText, pctCls),
+    metric('成交量', fmtAmt(live.volume)),
+    metric('成交额', fmtAmt(live.amount)),
+    metric('换手率', live.turnoverRate != null ? fmt(live.turnoverRate, 2) + '%' : ''),
+    metric('量比', fmt(live.volumeRatio, 2)),
+    metric('振幅', live.amplitude != null ? fmt(live.amplitude, 2) + '%' : ''),
+    metric('主力净流入', fmtAmt(live.mainNetInflow)),
+    metric('大单净流入', fmtAmt(live.largeNetInflow)),
+    metric('超大单净流入', fmtAmt(live.superLargeNetInflow)),
+    metric('主动买', fmtAmt(live.activeBuyVolume)),
+    metric('主动卖', fmtAmt(live.activeSellVolume)),
+    metric('主买额', fmtAmt(live.mainBuy)),
+    metric('主卖额', fmtAmt(live.mainSell)),
+    metric('主净额', fmtAmt(live.mainNet)),
+  ].join('');
+  const rows = Array.isArray(lhb) ? lhb : [];
+  $('#liveLhb').textContent = rows.length
+    ? '龙虎榜: ' + rows.map((r) => (r.tradeDate || '') + ' 净买' + fmtAmt(r.netAmount) + (r.reason ? ' (' + r.reason + ')' : '')).join(' | ')
+    : '龙虎榜: 暂无记录';
+}
+
+function stopLivePoll() {
+  if (state.liveTimer) {
+    clearInterval(state.liveTimer);
+    state.liveTimer = null;
+  }
+}
+
+function startLivePoll(code) {
+  stopLivePoll();
+  state.liveCode = code;
+  const sec = Math.max(15, Number(state.liveIntervalSec) || 60);
+  state.liveTimer = setInterval(() => {
+    refreshLive(code).catch(() => {});
+  }, sec * 1000);
+}
+
+async function refreshLive(code) {
+  if (!code) return null;
+  const data = await api('/api/live/latest?code=' + encodeURIComponent(code));
+  if (data.config?.pollIntervalSec) state.liveIntervalSec = data.config.pollIntervalSec;
+  renderLiveBox(data.live, data.lhb, (data.live?.tradeDate || '') + ' ' + (data.live?.tradeTime || '') + ' · 每' + state.liveIntervalSec + 's');
+  return data;
+}
+
+function renderLiveWatchTable(rows) {
+  const tbody = $('#liveTable tbody');
+  if (!tbody) return;
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="15">监控列表为空。检索股票或运行筛选后会自动加入。</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map((w) => {
+    const L = w.live || {};
+    const pct = L.pctChange;
+    const pctCls = pct > 0 ? 'up' : pct < 0 ? 'down' : '';
+    return '<tr>' +
+      '<td>' + escapeHtml(w.code) + '</td>' +
+      '<td>' + escapeHtml(w.name || '') + '</td>' +
+      '<td>' + escapeHtml(w.source || '') + '</td>' +
+      '<td class="' + pctCls + '">' + fmt(L.price, 2) + '</td>' +
+      '<td class="' + pctCls + '">' + (pct == null ? '' : fmt(pct, 2)) + '</td>' +
+      '<td>' + fmtAmt(L.volume) + '</td>' +
+      '<td>' + fmtAmt(L.amount) + '</td>' +
+      '<td>' + (L.turnoverRate != null ? fmt(L.turnoverRate, 2) : '') + '</td>' +
+      '<td>' + fmt(L.volumeRatio, 2) + '</td>' +
+      '<td>' + fmtAmt(L.mainNetInflow) + '</td>' +
+      '<td>' + fmtAmt(L.activeBuyVolume) + '</td>' +
+      '<td>' + fmtAmt(L.activeSellVolume) + '</td>' +
+      '<td>' + fmtAmt(L.mainBuy) + '</td>' +
+      '<td>' + fmtAmt(L.mainSell) + '</td>' +
+      '<td>' + escapeHtml((L.tradeDate || '') + ' ' + (L.tradeTime || '')) + '</td>' +
+      '</tr>';
+  }).join('');
+}
+
+async function loadLiveWatchlist() {
+  const data = await api('/api/live/watchlist');
+  if (data.config?.pollIntervalSec) state.liveIntervalSec = data.config.pollIntervalSec;
+  const st = await api('/api/live/status');
+  const p = st.poll || {};
+  $('#livePollStatus').textContent =
+    '间隔 ' + state.liveIntervalSec + 's · 监控 ' + (p.stats?.watchCount ?? data.rows.length) +
+    ' 只 · 快照 ' + (p.stats?.snapCount ?? '-') +
+    ' · 交易时段 ' + (p.trading ? '是' : '否') +
+    (p.finishedAt ? ' · 上次 ' + new Date(p.finishedAt).toLocaleTimeString('zh-CN') : '');
+  renderLiveWatchTable(data.rows || []);
+  return data;
+}
+
 
 async function api(url, opts) {
   const res = await fetch(url, {
@@ -162,6 +281,11 @@ async function loadResult() {
           ? '（匹配 ' + data.resolved.name + '）'
           : '');
       renderRows(r ? [r] : []);
+      if (data.live || data.lhb) {
+        if (data.liveConfig?.pollIntervalSec) state.liveIntervalSec = data.liveConfig.pollIntervalSec;
+        renderLiveBox(data.live, data.lhb);
+        if (r?.code) startLivePoll(r.code);
+      }
       setBadge('idle', '远程查询');
       return data;
     } catch (e) {
@@ -256,9 +380,42 @@ async function runScreenAndShow() {
 
 async function init() {
   document.querySelectorAll('.tab').forEach((btn) => {
-    btn.addEventListener('click', () => showTab(btn.dataset.tab));
+    btn.addEventListener('click', () => {
+      showTab(btn.dataset.tab);
+      if (btn.dataset.tab === 'live') loadLiveWatchlist().catch(alert);
+    });
   });
   $('#btnFilter').addEventListener('click', () => loadResult().catch(alert));
+  if ($('#btnCollectNow')) {
+    $('#btnCollectNow').addEventListener('click', async () => {
+      if (!state.liveCode) return alert('请先查询一只股票');
+      try {
+        setLoading(true, '采集中…');
+        await api('/api/live/collect', { method: 'POST', body: JSON.stringify({ code: state.liveCode, force: true }) });
+        await refreshLive(state.liveCode);
+      } catch (e) {
+        alert(e.message);
+      } finally {
+        setLoading(false);
+      }
+    });
+  }
+  if ($('#btnLiveRefresh')) {
+    $('#btnLiveRefresh').addEventListener('click', () => loadLiveWatchlist().catch(alert));
+  }
+  if ($('#btnLiveCollectAll')) {
+    $('#btnLiveCollectAll').addEventListener('click', async () => {
+      try {
+        setLoading(true, '全量采集中…');
+        await api('/api/live/collect', { method: 'POST', body: JSON.stringify({ force: true }) });
+        await loadLiveWatchlist();
+      } catch (e) {
+        alert(e.message);
+      } finally {
+        setLoading(false);
+      }
+    });
+  }
   $('#filterQ').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') loadResult().catch(alert);
   });
@@ -268,6 +425,11 @@ async function init() {
 
   const cfg = await api('/api/config');
   fillConfigForm(cfg.config);
+  if (cfg.liveConfig?.pollIntervalSec) state.liveIntervalSec = cfg.liveConfig.pollIntervalSec;
+  if ($('#liveConfigHint') && cfg.liveConfig) {
+    $('#liveConfigHint').textContent =
+      '实时监控: 每 ' + cfg.liveConfig.pollIntervalSec + ' 秒采集一次（config.smallLive.pollIntervalSec / 环境变量 SMALL_POLL_SEC），入库 ' + (cfg.liveConfig.dbPath || 'data/small-live.db');
+  }
 
   $('#configForm').addEventListener('submit', async (e) => {
     e.preventDefault();

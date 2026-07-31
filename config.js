@@ -34,4 +34,11 @@ module.exports = {
     maxPriceVsYearAvg: 1.0,
     maxPriceVsYearLow: 1.25,
   },
+  smallLive: {
+    dbPath: './data/small-live.db',
+    pollIntervalSec: Number(process.env.SMALL_POLL_SEC || 60),
+    maxWatchlist: 200,
+    lhbSyncIntervalMin: 60,
+    collectOutsideHours: false,
+  },
 };

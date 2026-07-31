@@ -3,6 +3,9 @@ const path = require('path');
 const express = require('express');
 const config = require('../config');
 const { DEFAULTS, YI, runScreen, lookupStock } = require('./exportSmall');
+const smallDb = require('./storage/smallDatabase');
+const smallCollector = require('./smallCollector');
+const { stockFromParts } = require('./stocks');
 
 const PORT = Number(process.env.SMALL_PORT || config.smallPort || 3010);
 const RUNTIME_PATH = path.join(__dirname, '..', 'data', 'exportSmall.runtime.json');
@@ -140,6 +143,33 @@ function mapRow(r) {
   };
 }
 
+
+function trackScreenRows(rows) {
+  if (!Array.isArray(rows)) return 0;
+  let n = 0;
+  for (const r of rows) {
+    if (!r?.code) continue;
+    try {
+      smallCollector.ensureWatch(stockFromParts(r.code, r.name), 'screen');
+      n++;
+    } catch {
+      /* ignore */
+    }
+  }
+  return n;
+}
+
+function publicLiveConfig() {
+  const o = smallCollector.liveOpts();
+  return {
+    pollIntervalSec: o.pollIntervalSec,
+    maxWatchlist: o.maxWatchlist,
+    lhbSyncIntervalMin: o.lhbSyncIntervalMin,
+    collectOutsideHours: o.collectOutsideHours,
+    dbPath: smallDb.dbPath(),
+  };
+}
+
 async function startScreen(opts) {
   if (job.status === 'running') {
     return { ok: false, error: 'busy' };
@@ -168,6 +198,11 @@ async function startScreen(opts) {
         rows: result.rows.map(mapRow),
       };
       persistResult(lastResult);
+      try {
+        trackScreenRows(lastResult.rows);
+      } catch (e) {
+        console.warn('[small-live] track screen failed:', e.message || e);
+      }
       job.status = 'done';
       job.finishedAt = new Date().toISOString();
       job.progress = {
@@ -252,14 +287,38 @@ app.get('/api/stock/lookup', async (req, res) => {
   }
   try {
     const { row, market, resolved } = await lookupStock(q);
+    const mapped = mapRow(row);
+    let live = null;
+    let lhb = [];
+    try {
+      const watched = await smallCollector.watchAndCollect(
+        stockFromParts(mapped.code, mapped.name),
+        'lookup'
+      );
+      live = watched.live || null;
+      smallDb.upsertFundamentals(mapped.code, mapped.name, mapped);
+      lhb = smallDb.getLhbRecords(mapped.code, 5).map((r) => ({
+        tradeDate: r.trade_date,
+        reason: r.reason,
+        netAmount: r.net_amount,
+        buyAmount: r.buy_amount,
+        sellAmount: r.sell_amount,
+        pctChange: r.pct_change,
+      }));
+    } catch (e) {
+      console.warn('[small-live] lookup collect failed:', e.message || e);
+    }
     res.json({
       ok: true,
       source: 'remote',
       query: q,
       resolved,
       market: market || null,
-      row: mapRow(row),
-      rows: [mapRow(row)],
+      row: mapped,
+      rows: [mapped],
+      live,
+      lhb,
+      liveConfig: publicLiveConfig(),
     });
   } catch (e) {
     res.status(404).json({ ok: false, error: e.message || String(e) });
@@ -305,7 +364,64 @@ app.get('/api/screen/result', (req, res) => {
   });
 });
 
+
+app.get('/api/live/status', (_req, res) => {
+  res.json({ ok: true, poll: smallCollector.getPollStatus(), config: publicLiveConfig() });
+});
+
+app.get('/api/live/watchlist', (_req, res) => {
+  const list = smallDb.getWatchlist(true);
+  const latest = smallDb.getLatestSnapshots(list.map((x) => x.code));
+  const byCode = new Map(latest.map((x) => [x.code, x]));
+  res.json({
+    ok: true,
+    config: publicLiveConfig(),
+    rows: list.map((w) => ({
+      ...w,
+      live: smallCollector.mapLiveRow(byCode.get(w.code), w.name),
+    })),
+  });
+});
+
+app.get('/api/live/latest', (req, res) => {
+  const code = String(req.query.code || '').trim();
+  if (!code) return res.status(400).json({ ok: false, error: '缺少 code' });
+  const bundle = smallCollector.getLiveBundle(code);
+  res.json({ ok: true, ...bundle, config: publicLiveConfig() });
+});
+
+app.post('/api/live/collect', async (req, res) => {
+  try {
+    const code = String(req.body?.code || req.query.code || '').trim();
+    const force = req.body?.force !== false;
+    if (code) {
+      const w = smallDb.getWatchlistStock(code) || stockFromParts(code);
+      smallCollector.ensureWatch(w, 'manual');
+      const r = await smallCollector.collectOnce(w, { force: true, withDepth: true, withLhb: true });
+      return res.json({ ok: true, result: r, live: r.live || null });
+    }
+    const results = await smallCollector.collectWatchlist(force);
+    res.json({ ok: true, poll: smallCollector.getPollStatus(), count: results.length });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message || String(e) });
+  }
+});
+
+app.post('/api/live/watch', (req, res) => {
+  try {
+    const code = String(req.body?.code || '').trim();
+    const name = req.body?.name || '';
+    if (!code) return res.status(400).json({ ok: false, error: '缺少 code' });
+    const s = smallCollector.ensureWatch(stockFromParts(code, name), req.body?.source || 'manual');
+    res.json({ ok: true, stock: s });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: e.message || String(e) });
+  }
+});
+
+
 loadCachedResult();
+
 
 // ensure includeST default true for web runtime file if missing
 (() => {
@@ -315,6 +431,16 @@ loadCachedResult();
   }
 })();
 
+// seed watchlist from cached screen
+try {
+  if (lastResult?.rows?.length) trackScreenRows(lastResult.rows);
+} catch {
+  /* ignore */
+}
+
+smallCollector.startPolling();
+
 app.listen(PORT, () => {
   console.log(`[small-screen] http://localhost:${PORT}  (独立于 3009)`);
+  console.log(`[small-live] db=${smallDb.dbPath()} interval=${smallCollector.liveOpts().pollIntervalSec}s`);
 });

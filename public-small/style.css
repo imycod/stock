@@ -199,3 +199,57 @@ td.clip {
 .market-box.cloud { background: #f3f4f6; color: #374151; }
 .yes { color: var(--danger); font-weight: 600; }
 .ok { color: #067647; font-weight: 600; }
+
+.live-box {
+  margin: 0 0 14px;
+  padding: 14px 16px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+.live-box.hidden { display: none; }
+.live-head {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.live-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 10px;
+}
+.live-metrics .m {
+  padding: 8px 10px;
+  background: #f7f3ea;
+  border-radius: 8px;
+}
+.live-metrics .m .k {
+  display: block;
+  font-size: 11px;
+  color: var(--muted);
+}
+.live-metrics .m .v {
+  display: block;
+  margin-top: 2px;
+  font-size: 16px;
+  font-weight: 600;
+}
+.live-metrics .up { color: #b42318; }
+.live-metrics .down { color: #0f6a5a; }
+.live-lhb {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: pre-wrap;
+}
+.btn-sm { padding: 6px 10px; font-size: 12px; }
+.muted { color: var(--muted); font-size: 12px; }
+.live-toolbar {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}

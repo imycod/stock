@@ -21,7 +21,8 @@
 
   <nav class="tabs">
     <button class="tab active" data-tab="result">筛选结果</button>
-    <button class="tab" data-tab="config">配置参数</button>
+    <button class="tab" data-tab="live">实时监控</button>
+      <button class="tab" data-tab="config">配置参数</button>
   </nav>
 
   <main>
@@ -64,6 +65,15 @@
         </label>
         <button id="btnFilter" class="btn btn-secondary">查询</button>
       </div>
+      <div id="liveBox" class="live-box hidden">
+        <div class="live-head">
+          <strong id="liveTitle">实时指标</strong>
+          <span id="liveMeta" class="muted"></span>
+          <button id="btnCollectNow" class="btn btn-secondary btn-sm" type="button">立即采集</button>
+        </div>
+        <div id="liveMetrics" class="live-metrics"></div>
+        <div id="liveLhb" class="live-lhb"></div>
+      </div>
       <div id="stats" class="stats">尚未加载数据。可点「刷新数据」或到「配置参数」保存后重新抓取。</div>
       <div class="table-wrap">
         <table id="resultTable">
@@ -99,7 +109,28 @@
       </div>
     </section>
 
-    <section id="tab-config" class="panel">
+    <section id="tab-live" class="panel">
+        <div class="live-toolbar">
+          <span id="livePollStatus" class="muted">监控状态加载中…</span>
+          <button id="btnLiveRefresh" class="btn btn-secondary" type="button">刷新监控</button>
+          <button id="btnLiveCollectAll" class="btn" type="button">全量采集</button>
+        </div>
+        <div class="table-wrap">
+          <table id="liveTable">
+            <thead>
+              <tr>
+                <th>代码</th><th>名称</th><th>来源</th><th>最新价</th><th>涨跌%</th>
+                <th>成交量</th><th>成交额</th><th>换手%</th><th>量比</th>
+                <th>主力净流入</th><th>主动买</th><th>主动卖</th><th>主买</th><th>主卖</th>
+                <th>时间</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+      <section id="tab-config" class="panel">
+      <p id="liveConfigHint" class="muted" style="margin:0 0 12px"></p>
       <form id="configForm" class="config-form">
         <div class="grid">
           <label>总股本上限(亿股)<input name="maxTotalSharesYi" type="number" step="0.1" /></label>
