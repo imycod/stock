@@ -6,6 +6,7 @@
 const fs = require('fs');
 const path = require('path');
 const XLSX = require('xlsx');
+const iconv = require('iconv-lite');
 const config = require('../config');
 
 const YI = 1e8;
@@ -1079,6 +1080,140 @@ function writeExcel(rows, outPath, meta) {
  * @param {object} userOpts
  * @param {(stage:string, payload:object)=>void} onProgress
  */
+
+function secidOf(code) {
+  const c = String(code || '');
+  // 沪市 1.xxxxxx，深/北交所 0.xxxxxx
+  return c.startsWith('6') || c.startsWith('5') ? `1.${c}` : `0.${c}`;
+}
+
+async function resolveStockQuery(q) {
+  const query = String(q || '').trim();
+  if (!query) throw new Error('请输入股票代码或名称');
+
+  const codeHint = /^\d{6}$/.test(query) ? query : null;
+
+  try {
+    const url =
+      'https://suggest3.sinajs.cn/suggest/type=11,12,13,14,15&key=' +
+      encodeURIComponent(query);
+    const res = await fetch(url, {
+      headers: {
+        'User-Agent': HEADERS['User-Agent'],
+        Referer: 'https://finance.sina.com.cn/',
+      },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok) throw new Error(`联想接口 HTTP ${res.status}`);
+    const text = iconv.decode(Buffer.from(await res.arrayBuffer()), 'gb18030');
+    const m = text.match(/suggestvalue="([^"]*)"/);
+    const raw = (m && m[1]) || '';
+    const items = raw
+      .split(';')
+      .filter(Boolean)
+      .map((line) => {
+        const p = line.split(',');
+        return {
+          hint: p[0] || '',
+          type: p[1] || '',
+          code: p[2] || '',
+          symbol: (p[3] || '').toLowerCase(),
+          name: p[4] || p[0] || '',
+        };
+      })
+      .filter((x) => /^\d{6}$/.test(x.code))
+      // 排除指数：symbol 形如 sh000001 且名称含「指数」
+      .filter((x) => !/指数/.test(x.name) && !/指数/.test(x.hint));
+
+    if (codeHint) {
+      const exact = items.find((x) => x.code === codeHint);
+      if (exact) return { code: exact.code, name: exact.name || exact.hint };
+      return { code: codeHint, name: '' };
+    }
+
+    const norm = (str) => String(str || '').replace(/\s+/g, '').toLowerCase();
+    const qn = norm(query);
+    const byName = items.find(
+      (x) => norm(x.name) === qn || norm(x.hint) === qn
+    );
+    if (byName) return { code: byName.code, name: byName.name || byName.hint };
+    const fuzzy = items.find((x) => norm(x.name).includes(qn) || norm(x.hint).includes(qn));
+    if (fuzzy) return { code: fuzzy.code, name: fuzzy.name || fuzzy.hint };
+    if (items[0]) return { code: items[0].code, name: items[0].name || items[0].hint };
+  } catch (e) {
+    if (codeHint) return { code: codeHint, name: '' };
+    throw e;
+  }
+
+  if (codeHint) return { code: codeHint, name: '' };
+  throw new Error(`未找到股票: ${query}`);
+}
+
+async function fetchQuoteByCode(code) {
+  const fields =
+    'f12,f14,f2,f3,f8,f10,f15,f16,f17,f18,f20,f21,f38,f39,f100';
+  const secid = secidOf(code);
+  let lastErr;
+  for (const host of CLIST_HOSTS) {
+    try {
+      const url =
+        `${host}/api/qt/ulist.np/get?fltt=2&invt=2&secids=${secid}` +
+        `&fields=${fields}&ut=fa5fd1943c7b386f172d6893dbfba107&_=${Date.now()}`;
+      const json = await fetchJson(url, HEADERS, 15000, 2);
+      const x = json.data?.diff?.[0];
+      if (!x) throw new Error('无行情数据');
+      return {
+        code: String(x.f12 || code),
+        name: String(x.f14 || ''),
+        price: num(x.f2),
+        pctChange: num(x.f3),
+        turnoverRate: num(x.f8),
+        volumeRatio: num(x.f10),
+        high: num(x.f15),
+        low: num(x.f16),
+        open: num(x.f17),
+        preClose: num(x.f18),
+        marketCap: num(x.f20),
+        floatCap: num(x.f21),
+        totalShares: num(x.f38),
+        floatShares: num(x.f39),
+        industry: x.f100 || '',
+      };
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr || new Error(`行情拉取失败: ${code}`);
+}
+
+/**
+ * 按代码/名称远程查询单只股票完整信息（不走筛选条件过滤）
+ */
+async function lookupStock(query, userOpts = {}) {
+  const cfg = (require('../config').exportSmall) || {};
+  const opts = { ...DEFAULTS, ...cfg, ...userOpts };
+  const resolved = await resolveStockQuery(query);
+  const quote = await fetchQuoteByCode(resolved.code);
+  if (!quote.name && resolved.name) quote.name = resolved.name;
+
+  const [holder, klines, market] = await Promise.all([
+    fetchHolderInfo(quote.code).catch(() => null),
+    fetchDailyKlines(quote.code, 260).catch(() => []),
+    fetchMarketWeather().catch(() => null),
+  ]);
+
+  const analysis = analyzeVolumePrice(klines || [], opts, quote) || {};
+  // 远程查询始终展示，不要求量价条件 pass
+  const row = {
+    ...quote,
+    ...(holder || {}),
+    ...analysis,
+    reasons: analysis.reasons || '',
+  };
+  const enriched = await enrichFundamentals(row);
+  return { row: enriched, market, resolved };
+}
+
 async function runScreen(userOpts = {}, onProgress = () => {}) {
   const cfg = (require('../config').exportSmall) || {};
   const opts = { ...DEFAULTS, ...cfg, ...userOpts };
@@ -1360,6 +1495,7 @@ module.exports = {
   DEFAULTS,
   YI,
   runScreen,
+  lookupStock,
   resolveOptions,
   buildExcelRows,
   writeExcel,

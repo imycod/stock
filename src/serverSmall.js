@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const express = require('express');
 const config = require('../config');
-const { DEFAULTS, YI, runScreen } = require('./exportSmall');
+const { DEFAULTS, YI, runScreen, lookupStock } = require('./exportSmall');
 
 const PORT = Number(process.env.SMALL_PORT || config.smallPort || 3010);
 const RUNTIME_PATH = path.join(__dirname, '..', 'data', 'exportSmall.runtime.json');
@@ -242,6 +242,28 @@ app.get('/api/screen/status', (_req, res) => {
     hasResult: !!lastResult,
     resultCount: lastResult?.rows?.length || 0,
   });
+});
+
+
+app.get('/api/stock/lookup', async (req, res) => {
+  const q = String(req.query.q || '').trim();
+  if (!q) {
+    return res.status(400).json({ ok: false, error: '请输入股票代码或名称' });
+  }
+  try {
+    const { row, market, resolved } = await lookupStock(q);
+    res.json({
+      ok: true,
+      source: 'remote',
+      query: q,
+      resolved,
+      market: market || null,
+      row: mapRow(row),
+      rows: [mapRow(row)],
+    });
+  } catch (e) {
+    res.status(404).json({ ok: false, error: e.message || String(e) });
+  }
 });
 
 app.get('/api/screen/result', (req, res) => {

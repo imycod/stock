@@ -146,8 +146,34 @@ async function loadResult() {
   const focus = $('#filterFocus').value;
   const uncapped = $('#filterUncapped').value;
   const abnormal = $('#filterAbnormal').value;
+
+  // 有搜索词时：远程检索该股票完整信息并展示
+  if (q) {
+    setLoading(true, '正在远程查询 ' + q + ' ...');
+    try {
+      const data = await api('/api/stock/lookup?q=' + encodeURIComponent(q));
+      setLoading(false);
+      if (data.market) renderMarket(data.market);
+      const r = data.row || (data.rows && data.rows[0]);
+      $('#stats').textContent =
+        '远程查询: ' +
+        (r ? r.code + ' ' + r.name : q) +
+        (data.resolved && data.resolved.name && r && data.resolved.name !== r.name
+          ? '（匹配 ' + data.resolved.name + '）'
+          : '');
+      renderRows(r ? [r] : []);
+      setBadge('idle', '远程查询');
+      return data;
+    } catch (e) {
+      setLoading(false);
+      setBadge('error', '查询失败');
+      $('#stats').textContent = '远程查询失败: ' + (e.message || e);
+      renderRows([]);
+      throw e;
+    }
+  }
+
   const params = new URLSearchParams();
-  if (q) params.set('q', q);
   if (stage) params.set('stage', stage);
   if (focus) params.set('focus', focus);
   if (uncapped) params.set('uncapped', uncapped);
@@ -166,7 +192,20 @@ async function loadResult() {
   const uncapN = (data.rows || []).filter((r) => r.justUncapped).length;
   const abnN = (data.rows || []).filter((r) => r.hasAbnormal).length;
   $('#stats').textContent =
-    `共 ${data.total}/${data.allTotal} 只 · 生成于 ${new Date(data.generatedAt).toLocaleString('zh-CN')} · ST ${st.stCount || 0} · 当前筛选内刚摘帽 ${uncapN} · 有异动 ${abnN} · ${stages}`;
+    '共 ' +
+    data.total +
+    '/' +
+    data.allTotal +
+    ' 只 · 生成于 ' +
+    new Date(data.generatedAt).toLocaleString('zh-CN') +
+    ' · ST ' +
+    (st.stCount || 0) +
+    ' · 当前筛选内刚摘帽 ' +
+    uncapN +
+    ' · 有异动 ' +
+    abnN +
+    ' · ' +
+    stages;
   renderRows(data.rows);
   return data;
 }
