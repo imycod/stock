@@ -44,7 +44,7 @@ module.exports = {
   ai: {
     provider: 'zhipu',
     baseUrl: process.env.ZHIPU_BASE_URL || 'https://open.bigmodel.cn/api/paas/v4',
-    apiKey: process.env.ZHIPU_API_KEY || process.env.BIGMODEL_API_KEY || 'bdd431c8a1454bed9a166fabbd10ac51.mpcM6i9pXuaw0lZX',
+    apiKey: process.env.ZHIPU_API_KEY || process.env.BIGMODEL_API_KEY || '',
     model: process.env.ZHIPU_MODEL || 'glm-4.7-flash',
     defaultDays: Number(process.env.AI_DEFAULT_DAYS || 5),
     maxDays: 10,
