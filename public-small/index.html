@@ -29,7 +29,7 @@
     <section id="tab-result" class="panel active">
       <div class="filters">
         <label>名称/代码
-          <input id="filterQ" type="search" placeholder="代码/名称，远程检索如 603400 / 华之杰" />
+          <input id="filterQ" type="search" placeholder="在当前结果中按代码/名称过滤" />
         </label>
         <label>盈利阶段
           <select id="filterStage">
@@ -63,8 +63,9 @@
             <option value="1">仅有异动</option>
           </select>
         </label>
-        <button id="btnFilter" class="btn btn-secondary">查询</button>
-        <span class="muted" style="align-self:center">复合条件本地无命中时，自动远程扫描主板</span>
+        <button id="btnFilter" class="btn btn-secondary" type="button">搜索</button>
+        <button id="btnRemoteSearch" class="btn" type="button">远程搜索</button>
+        <span class="muted" style="align-self:center">搜索=过滤当前数据；远程搜索=查主板/个股</span>
       </div>
       <div id="liveBox" class="live-box hidden">
         <div class="live-head">
@@ -112,6 +113,10 @@
 
     <section id="tab-live" class="panel">
         <div class="live-toolbar">
+          <label class="live-filter">名称/代码
+            <input id="liveFilterQ" type="search" placeholder="如 600759 / 洲际" />
+          </label>
+          <button id="btnLiveFilter" class="btn btn-secondary" type="button">筛选</button>
           <span id="livePollStatus" class="muted">监控状态加载中…</span>
           <button id="btnLiveRefresh" class="btn btn-secondary" type="button">刷新监控</button>
           <button id="btnLiveCollectAll" class="btn" type="button">全量采集</button>

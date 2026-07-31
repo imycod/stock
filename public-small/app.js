@@ -1,6 +1,6 @@
 const $ = (s) => document.querySelector(s);
 
-const state = { polling: null, liveCode: null, liveTimer: null, liveIntervalSec: 60 };
+const state = { polling: null, liveCode: null, liveTimer: null, liveIntervalSec: 60, liveRows: [] };
 
 function showTab(name) {
   document.querySelectorAll('.tab').forEach((el) => {
@@ -108,11 +108,40 @@ async function refreshLive(code) {
   return data;
 }
 
+function filterLiveRows(rows, q) {
+  const needle = String(q || '').trim().toLowerCase();
+  if (!needle) return rows || [];
+  return (rows || []).filter((w) => {
+    const code = String(w.code || '').toLowerCase();
+    const name = String(w.name || '').toLowerCase();
+    const liveName = String(w.live?.name || '').toLowerCase();
+    return code.includes(needle) || name.includes(needle) || liveName.includes(needle);
+  });
+}
+
+function applyLiveFilter() {
+  const q = $('#liveFilterQ') ? $('#liveFilterQ').value : '';
+  const filtered = filterLiveRows(state.liveRows, q);
+  renderLiveWatchTable(filtered);
+  const status = $('#livePollStatus');
+  if (status && state.liveRows.length) {
+    const base = status.textContent.replace(/\s*·\s*显示\s*\d+\/\d+.*$/, '');
+    status.textContent = q.trim()
+      ? base + ' · 显示 ' + filtered.length + '/' + state.liveRows.length
+      : base;
+  }
+  return filtered;
+}
+
 function renderLiveWatchTable(rows) {
   const tbody = $('#liveTable tbody');
   if (!tbody) return;
   if (!rows.length) {
-    tbody.innerHTML = '<tr><td colspan="15">监控列表为空。检索股票或运行筛选后会自动加入。</td></tr>';
+    const hasAll = (state.liveRows || []).length > 0;
+    const tip = hasAll
+      ? '无匹配监控标的，请调整名称/代码筛选'
+      : '监控列表为空。检索股票或运行筛选后会自动加入。';
+    tbody.innerHTML = '<tr><td colspan="15">' + tip + '</td></tr>';
     return;
   }
   tbody.innerHTML = rows.map((w) => {
@@ -144,12 +173,13 @@ async function loadLiveWatchlist() {
   if (data.config?.pollIntervalSec) state.liveIntervalSec = data.config.pollIntervalSec;
   const st = await api('/api/live/status');
   const p = st.poll || {};
+  state.liveRows = data.rows || [];
   $('#livePollStatus').textContent =
-    '间隔 ' + state.liveIntervalSec + 's · 监控 ' + (p.stats?.watchCount ?? data.rows.length) +
+    '间隔 ' + state.liveIntervalSec + 's · 监控 ' + (p.stats?.watchCount ?? state.liveRows.length) +
     ' 只 · 快照 ' + (p.stats?.snapCount ?? '-') +
     ' · 交易时段 ' + (p.trading ? '是' : '否') +
     (p.finishedAt ? ' · 上次 ' + new Date(p.finishedAt).toLocaleTimeString('zh-CN') : '');
-  renderLiveWatchTable(data.rows || []);
+  applyLiveFilter();
   return data;
 }
 
@@ -319,23 +349,78 @@ async function runRemoteFilterAndShow() {
   return data;
 }
 
-async function loadResult() {
+async function loadLocalResult() {
   const q = $('#filterQ').value.trim();
   const stage = $('#filterStage').value;
   const focus = $('#filterFocus').value;
   const uncapped = $('#filterUncapped').value;
   const abnormal = $('#filterAbnormal').value;
 
-  // 有搜索词时：远程检索该股票完整信息并展示
+  const params = new URLSearchParams();
+  if (q) params.set('q', q);
+  if (stage) params.set('stage', stage);
+  if (focus) params.set('focus', focus);
+  if (uncapped) params.set('uncapped', uncapped);
+  if (abnormal) params.set('abnormal', abnormal);
+
+  const data = await api('/api/screen/result?' + params.toString());
+  renderMarket(data.market);
+  // 本地搜索不展示单票实时卡片（避免与远程混淆）
+  if ($('#liveBox')) $('#liveBox').classList.add('hidden');
+  stopLivePoll();
+
+  if (data.empty) {
+    $('#stats').textContent = '尚无缓存结果，请点击「刷新数据」开始抓取，或使用「远程搜索」。';
+    renderRows([]);
+    setBadge('idle', '无本地数据');
+    return data;
+  }
+
+  const st = data.stats || {};
+  const stages = st.stageCount
+    ? Object.entries(st.stageCount).map(([k, v]) => k + v).join(' / ')
+    : '';
+  const uncapN = (data.rows || []).filter((r) => r.justUncapped).length;
+  const abnN = (data.rows || []).filter((r) => r.hasAbnormal).length;
+  $('#stats').textContent =
+    '本地搜索 ' +
+    data.total +
+    '/' +
+    data.allTotal +
+    ' 只 · 生成于 ' +
+    new Date(data.generatedAt).toLocaleString('zh-CN') +
+    ' · ST ' +
+    (st.stCount || 0) +
+    ' · 刚摘帽 ' +
+    uncapN +
+    ' · 异动 ' +
+    abnN +
+    (stages ? ' · ' + stages : '') +
+    (!(data.rows || []).length ? '（无命中，可点「远程搜索」）' : '');
+  renderRows(data.rows || []);
+  setBadge('idle', '本地搜索');
+  return data;
+}
+
+async function loadRemoteSearch() {
+  const q = $('#filterQ').value.trim();
+  const stage = $('#filterStage').value;
+  const focus = $('#filterFocus').value;
+  const uncapped = $('#filterUncapped').value;
+  const abnormal = $('#filterAbnormal').value;
+  const compound = { stage, focus, uncapped, abnormal };
+
+  // 有名称/代码：远程个股查询
   if (q) {
     setLoading(true, '正在远程查询 ' + q + ' ...');
+    setBadge('running', '远程搜索');
     try {
       const data = await api('/api/stock/lookup?q=' + encodeURIComponent(q));
       setLoading(false);
       if (data.market) renderMarket(data.market);
       const r = data.row || (data.rows && data.rows[0]);
       $('#stats').textContent =
-        '远程查询: ' +
+        '远程搜索: ' +
         (r ? r.code + ' ' + r.name : q) +
         (data.resolved && data.resolved.name && r && data.resolved.name !== r.name
           ? '（匹配 ' + data.resolved.name + '）'
@@ -346,63 +431,28 @@ async function loadResult() {
         renderLiveBox(data.live, data.lhb);
         if (r?.code) startLivePoll(r.code);
       }
-      setBadge('idle', '远程查询');
+      setBadge('idle', '远程搜索');
       return data;
     } catch (e) {
       setLoading(false);
-      setBadge('error', '查询失败');
-      $('#stats').textContent = '远程查询失败: ' + (e.message || e);
+      setBadge('error', '远程失败');
+      $('#stats').textContent = '远程搜索失败: ' + (e.message || e);
       renderRows([]);
       throw e;
     }
   }
 
-  const params = new URLSearchParams();
-  if (stage) params.set('stage', stage);
-  if (focus) params.set('focus', focus);
-  if (uncapped) params.set('uncapped', uncapped);
-  if (abnormal) params.set('abnormal', abnormal);
-  const data = await api('/api/screen/result?' + params.toString());
-  renderMarket(data.market);
-
-  const compound = { stage, focus, uncapped, abnormal };
-  const needRemote =
-    data.suggestRemote ||
-    ((data.empty || !(data.rows || []).length) && hasCompoundFiltersClient(compound));
-
-  if (needRemote) {
-    return runRemoteFilterAndShow();
+  // 无代码时：用复合条件远程扫主板
+  if (!hasCompoundFiltersClient(compound)) {
+    alert('远程搜索请输入名称/代码，或选择盈利阶段/持股集中度/刚摘帽/异动');
+    return null;
   }
+  return runRemoteFilterAndShow();
+}
 
-  if (data.empty) {
-    $('#stats').textContent = '尚无缓存结果，请点击「刷新数据」开始抓取。';
-    renderRows([]);
-    return data;
-  }
-  const st = data.stats || {};
-  const stages = st.stageCount
-    ? Object.entries(st.stageCount).map(([k, v]) => k + v).join(' / ')
-    : '';
-  const uncapN = (data.rows || []).filter((r) => r.justUncapped).length;
-  const abnN = (data.rows || []).filter((r) => r.hasAbnormal).length;
-  $('#stats').textContent =
-    '本地筛选 ' +
-    data.total +
-    '/' +
-    data.allTotal +
-    ' 只 · 生成于 ' +
-    new Date(data.generatedAt).toLocaleString('zh-CN') +
-    ' · ST ' +
-    (st.stCount || 0) +
-    ' · 当前筛选内刚摘帽 ' +
-    uncapN +
-    ' · 有异动 ' +
-    abnN +
-    ' · ' +
-    stages;
-  renderRows(data.rows);
-  setBadge('idle', '本地筛选');
-  return data;
+async function loadResult() {
+  // 兼容旧调用：默认本地搜索
+  return loadLocalResult();
 }
 
 async function pollUntilDone() {
@@ -457,7 +507,10 @@ async function init() {
       if (btn.dataset.tab === 'live') loadLiveWatchlist().catch(alert);
     });
   });
-  $('#btnFilter').addEventListener('click', () => loadResult().catch(alert));
+  $('#btnFilter').addEventListener('click', () => loadLocalResult().catch(alert));
+  if ($('#btnRemoteSearch')) {
+    $('#btnRemoteSearch').addEventListener('click', () => loadRemoteSearch().catch(alert));
+  }
   if ($('#btnCollectNow')) {
     $('#btnCollectNow').addEventListener('click', async () => {
       if (!state.liveCode) return alert('请先查询一只股票');
@@ -471,6 +524,15 @@ async function init() {
         setLoading(false);
       }
     });
+  }
+  if ($('#btnLiveFilter')) {
+    $('#btnLiveFilter').addEventListener('click', () => applyLiveFilter());
+  }
+  if ($('#liveFilterQ')) {
+    $('#liveFilterQ').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') applyLiveFilter();
+    });
+    $('#liveFilterQ').addEventListener('input', () => applyLiveFilter());
   }
   if ($('#btnLiveRefresh')) {
     $('#btnLiveRefresh').addEventListener('click', () => loadLiveWatchlist().catch(alert));
@@ -489,7 +551,7 @@ async function init() {
     });
   }
   $('#filterQ').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') loadResult().catch(alert);
+    if (e.key === 'Enter') loadLocalResult().catch(alert);
   });
   $('#btnRefresh').addEventListener('click', () => {
     runScreenAndShow().catch((e) => alert(e.message));
