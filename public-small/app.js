@@ -1,6 +1,6 @@
 const $ = (s) => document.querySelector(s);
 
-const state = { polling: null, liveCode: null, liveTimer: null, liveIntervalSec: 60, liveRows: [] };
+const state = { polling: null, liveCode: null, liveTimer: null, liveIntervalSec: 60, liveRows: [], favoriteCodes: new Set(), favRows: [] };
 
 function showTab(name) {
   document.querySelectorAll('.tab').forEach((el) => {
@@ -251,10 +251,123 @@ function readConfigForm() {
   };
 }
 
+
+async function loadFavoriteCodes() {
+  try {
+    const data = await api('/api/favorites/codes');
+    state.favoriteCodes = new Set(data.codes || []);
+  } catch {
+    state.favoriteCodes = new Set();
+  }
+  return state.favoriteCodes;
+}
+
+function isFav(code) {
+  return state.favoriteCodes.has(String(code));
+}
+
+async function toggleFavorite(row) {
+  const code = String(row && row.code || '');
+  if (!code) return;
+  if (isFav(code)) {
+    const data = await api('/api/favorites/' + encodeURIComponent(code), { method: 'DELETE' });
+    state.favoriteCodes = new Set(data.codes || []);
+  } else {
+    const data = await api('/api/favorites', {
+      method: 'POST',
+      body: JSON.stringify({ code: code, name: row.name || '', row: row }),
+    });
+    state.favoriteCodes = new Set(data.codes || []);
+  }
+  document.querySelectorAll('.fav-btn[data-code]').forEach(function (btn) {
+    const c = btn.getAttribute('data-code');
+    const on = isFav(c);
+    btn.classList.toggle('on', on);
+    btn.title = on ? '取消收藏' : '收藏';
+    btn.textContent = on ? '★' : '☆';
+  });
+  if ($('#tab-favorites') && $('#tab-favorites').classList.contains('active')) {
+    await loadFavorites().catch(function () {});
+  }
+}
+
+function renderFavTable(rows) {
+  const tbody = $('#favTable tbody');
+  if (!tbody) return;
+  if (!rows.length) {
+    const hasAll = (state.favRows || []).length > 0;
+    tbody.innerHTML =
+      '<tr><td colspan="11">' +
+      (hasAll ? '无匹配收藏，请调整名称/代码筛选' : '暂无收藏。可在筛选结果中点击 ★ 收藏') +
+      '</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows
+    .map(function (f) {
+      const r = f.row || {};
+      return (
+        '<tr>' +
+        '<td class="fav-actions"><button type="button" class="btn btn-secondary btn-sm btn-unfav" data-code="' +
+        escapeHtml(f.code) +
+        '">取消收藏</button></td>' +
+        '<td>' + escapeHtml(f.code) + '</td>' +
+        '<td>' + escapeHtml(f.name || r.name || '') + '</td>' +
+        '<td>' + escapeHtml(r.industry || '') + '</td>' +
+        '<td>' + escapeHtml(r.profitStage || '') + '</td>' +
+        '<td>' + escapeHtml(r.holdFocus || '') + '</td>' +
+        '<td>' + (r.holderNum == null ? '' : r.holderNum) + '</td>' +
+        '<td>' + fmt(r.marketCapYi) + '</td>' +
+        '<td>' + escapeHtml(r.uncapLabel || '') + '</td>' +
+        '<td class="' + (r.hasAbnormal ? 'yes' : '') + '">' + (r.hasAbnormal ? '有' : '') + '</td>' +
+        '<td>' + escapeHtml(f.updatedAt || f.createdAt || '') + '</td>' +
+        '</tr>'
+      );
+    })
+    .join('');
+  tbody.querySelectorAll('.btn-unfav').forEach(function (btn) {
+    btn.addEventListener('click', async function () {
+      try {
+        await toggleFavorite({ code: btn.getAttribute('data-code') });
+        await loadFavorites();
+      } catch (e) {
+        alert(e.message);
+      }
+    });
+  });
+}
+
+function applyFavFilter() {
+  const q = $('#favFilterQ') ? $('#favFilterQ').value.trim().toLowerCase() : '';
+  const filtered = (state.favRows || []).filter(function (f) {
+    if (!q) return true;
+    return (
+      String(f.code || '').toLowerCase().includes(q) ||
+      String(f.name || '').toLowerCase().includes(q) ||
+      String((f.row && f.row.name) || '').toLowerCase().includes(q)
+    );
+  });
+  renderFavTable(filtered);
+  if ($('#favStatus')) {
+    $('#favStatus').textContent = q
+      ? '显示 ' + filtered.length + '/' + state.favRows.length + ' 只收藏'
+      : '共 ' + state.favRows.length + ' 只收藏';
+  }
+  return filtered;
+}
+
+async function loadFavorites() {
+  const data = await api('/api/favorites');
+  state.favoriteCodes = new Set(data.codes || (data.rows || []).map(function (r) { return r.code; }));
+  state.favRows = data.rows || [];
+  applyFavFilter();
+  return data;
+}
+
 function renderRows(rows) {
+  window.__lastResultRows = rows || [];
   const tbody = $('#resultTable tbody');
   if (!rows.length) {
-    tbody.innerHTML = '<tr><td colspan="23">无匹配结果</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="24">无匹配结果</td></tr>';
     return;
   }
   tbody.innerHTML = rows
@@ -287,6 +400,18 @@ function renderRows(rows) {
       </tr>`;
     })
     .join('');
+  tbody.querySelectorAll('.fav-btn').forEach(function (btn) {
+    btn.addEventListener('click', async function (e) {
+      e.preventDefault();
+      const code = btn.getAttribute('data-code');
+      const full = (window.__lastResultRows || []).find(function (x) { return String(x.code) === String(code); });
+      try {
+        await toggleFavorite(full || { code: code, name: '' });
+      } catch (err) {
+        alert(err.message);
+      }
+    });
+  });
 }
 
 
@@ -344,6 +469,7 @@ async function runRemoteFilterAndShow() {
     ' · ' +
     new Date(data.generatedAt).toLocaleString('zh-CN') +
     (st.truncated ? ' · 已截断至上限' : '');
+  window.__lastResultRows = data.rows || [];
   renderRows(data.rows);
   setBadge('idle', '远程过滤');
   return data;
@@ -397,6 +523,7 @@ async function loadLocalResult() {
     abnN +
     (stages ? ' · ' + stages : '') +
     (!(data.rows || []).length ? '（无命中，可点「远程搜索」）' : '');
+  window.__lastResultRows = data.rows || [];
   renderRows(data.rows || []);
   setBadge('idle', '本地搜索');
   return data;
@@ -425,6 +552,7 @@ async function loadRemoteSearch() {
         (data.resolved && data.resolved.name && r && data.resolved.name !== r.name
           ? '（匹配 ' + data.resolved.name + '）'
           : '');
+      window.__lastResultRows = r ? [r] : [];
       renderRows(r ? [r] : []);
       if (data.live || data.lhb) {
         if (data.liveConfig?.pollIntervalSec) state.liveIntervalSec = data.liveConfig.pollIntervalSec;
@@ -505,6 +633,7 @@ async function init() {
     btn.addEventListener('click', () => {
       showTab(btn.dataset.tab);
       if (btn.dataset.tab === 'live') loadLiveWatchlist().catch(alert);
+      if (btn.dataset.tab === 'favorites') loadFavorites().catch(alert);
     });
   });
   $('#btnFilter').addEventListener('click', () => loadLocalResult().catch(alert));
@@ -527,6 +656,26 @@ async function init() {
   }
   if ($('#btnLiveFilter')) {
     $('#btnLiveFilter').addEventListener('click', () => applyLiveFilter());
+  }
+  if ($('#btnFavFilter')) {
+    $('#btnFavFilter').addEventListener('click', () => {
+      if (!(state.favRows || []).length) loadFavorites().catch(alert);
+      else applyFavFilter();
+    });
+  }
+  if ($('#favFilterQ')) {
+    $('#favFilterQ').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        if (!(state.favRows || []).length) loadFavorites().catch(alert);
+        else applyFavFilter();
+      }
+    });
+    $('#favFilterQ').addEventListener('input', () => {
+      if ((state.favRows || []).length) applyFavFilter();
+    });
+  }
+  if ($('#btnFavRefresh')) {
+    $('#btnFavRefresh').addEventListener('click', () => loadFavorites().catch(alert));
   }
   if ($('#liveFilterQ')) {
     $('#liveFilterQ').addEventListener('keydown', (e) => {
@@ -557,6 +706,7 @@ async function init() {
     runScreenAndShow().catch((e) => alert(e.message));
   });
 
+  await loadFavoriteCodes();
   const cfg = await api('/api/config');
   fillConfigForm(cfg.config);
   if (cfg.liveConfig?.pollIntervalSec) state.liveIntervalSec = cfg.liveConfig.pollIntervalSec;

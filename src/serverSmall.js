@@ -526,6 +526,57 @@ app.get('/api/screen/result', (req, res) => {
 });
 
 
+
+app.get('/api/favorites', (req, res) => {
+  try {
+    const q = String(req.query.q || '').trim();
+    const rows = smallDb.getFavorites(q);
+    res.json({ ok: true, rows, total: rows.length, codes: smallDb.getFavoriteCodes() });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message || String(e) });
+  }
+});
+
+app.get('/api/favorites/codes', (_req, res) => {
+  try {
+    res.json({ ok: true, codes: smallDb.getFavoriteCodes() });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message || String(e) });
+  }
+});
+
+app.post('/api/favorites', (req, res) => {
+  try {
+    const body = req.body || {};
+    const code = String(body.code || '').trim();
+    if (!/^\d{6}$/.test(code)) {
+      return res.status(400).json({ ok: false, error: '无效股票代码' });
+    }
+    const name = body.name || body.row?.name || '';
+    const payload = body.row || body.payload || { code, name };
+    smallDb.upsertFavorite({ code, name, note: body.note || '', payload });
+    // 顺带纳入实时监控，便于后续采集
+    try {
+      smallCollector.ensureWatch(stockFromParts(code, name), 'favorite');
+    } catch {
+      /* ignore */
+    }
+    res.json({ ok: true, codes: smallDb.getFavoriteCodes(), favorite: smallDb.getFavorite(code) });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message || String(e) });
+  }
+});
+
+app.delete('/api/favorites/:code', (req, res) => {
+  try {
+    const code = String(req.params.code || '').trim();
+    smallDb.removeFavorite(code);
+    res.json({ ok: true, codes: smallDb.getFavoriteCodes() });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message || String(e) });
+  }
+});
+
 app.get('/api/live/status', (_req, res) => {
   res.json({ ok: true, poll: smallCollector.getPollStatus(), config: publicLiveConfig() });
 });

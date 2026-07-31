@@ -22,6 +22,7 @@
   <nav class="tabs">
     <button class="tab active" data-tab="result">筛选结果</button>
     <button class="tab" data-tab="live">实时监控</button>
+    <button class="tab" data-tab="favorites">收藏列表</button>
       <button class="tab" data-tab="config">配置参数</button>
   </nav>
 
@@ -81,6 +82,7 @@
         <table id="resultTable">
           <thead>
             <tr>
+              <th>收藏</th>
               <th>代码</th>
               <th>名称</th>
               <th>行业</th>
@@ -129,6 +131,27 @@
                 <th>成交量</th><th>成交额</th><th>换手%</th><th>量比</th>
                 <th>主力净流入</th><th>主动买</th><th>主动卖</th><th>主买</th><th>主卖</th>
                 <th>时间</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+            <section id="tab-favorites" class="panel">
+        <div class="live-toolbar">
+          <label class="live-filter">名称/代码
+            <input id="favFilterQ" type="search" placeholder="如 600759 / 洲际" />
+          </label>
+          <button id="btnFavFilter" class="btn btn-secondary" type="button">筛选</button>
+          <button id="btnFavRefresh" class="btn btn-secondary" type="button">刷新</button>
+          <span id="favStatus" class="muted">尚未加载收藏</span>
+        </div>
+        <div class="table-wrap">
+          <table id="favTable">
+            <thead>
+              <tr>
+                <th>操作</th><th>代码</th><th>名称</th><th>行业</th><th>盈利阶段</th>
+                <th>持股集中度</th><th>股东户数</th><th>市值(亿)</th><th>摘帽状态</th><th>异动</th><th>收藏时间</th>
               </tr>
             </thead>
             <tbody></tbody>

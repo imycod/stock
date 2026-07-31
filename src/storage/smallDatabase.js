@@ -81,6 +81,15 @@ function initSchema() {
       UNIQUE(trade_date, code, reason)
     );
 
+    CREATE TABLE IF NOT EXISTS favorites (
+      code TEXT PRIMARY KEY,
+      name TEXT,
+      note TEXT,
+      payload TEXT,
+      created_at TEXT DEFAULT (datetime('now','localtime')),
+      updated_at TEXT DEFAULT (datetime('now','localtime'))
+    );
+
     CREATE TABLE IF NOT EXISTS fundamentals (
       code TEXT PRIMARY KEY,
       name TEXT,
@@ -353,6 +362,72 @@ function getStats() {
   return { watchCount, snapCount, lastSnap, dbPath: dbPath() };
 }
 
+
+function upsertFavorite(row) {
+  const stmt = getDb().prepare(`
+    INSERT INTO favorites (code, name, note, payload, created_at, updated_at)
+    VALUES (@code, @name, @note, @payload, datetime('now','localtime'), datetime('now','localtime'))
+    ON CONFLICT(code) DO UPDATE SET
+      name=COALESCE(excluded.name, favorites.name),
+      note=COALESCE(excluded.note, favorites.note),
+      payload=COALESCE(excluded.payload, favorites.payload),
+      updated_at=datetime('now','localtime')
+  `);
+  return stmt.run({
+    code: row.code,
+    name: row.name || null,
+    note: row.note || null,
+    payload: typeof row.payload === 'string' ? row.payload : JSON.stringify(row.payload || row.row || {}),
+  });
+}
+
+function removeFavorite(code) {
+  return getDb().prepare('DELETE FROM favorites WHERE code = ?').run(code);
+}
+
+function getFavorite(code) {
+  const row = getDb().prepare('SELECT * FROM favorites WHERE code = ?').get(code);
+  if (!row) return null;
+  let payload = {};
+  try { payload = JSON.parse(row.payload || '{}'); } catch { payload = {}; }
+  return { ...row, payload };
+}
+
+function getFavorites(q = '') {
+  const rows = getDb()
+    .prepare('SELECT * FROM favorites ORDER BY updated_at DESC, created_at DESC')
+    .all();
+  const needle = String(q || '').trim().toLowerCase();
+  return rows
+    .map((row) => {
+      let payload = {};
+      try { payload = JSON.parse(row.payload || '{}'); } catch { payload = {}; }
+      return {
+        code: row.code,
+        name: row.name || payload.name || '',
+        note: row.note || '',
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+        row: payload,
+      };
+    })
+    .filter((r) => {
+      if (!needle) return true;
+      return (
+        String(r.code).toLowerCase().includes(needle) ||
+        String(r.name).toLowerCase().includes(needle)
+      );
+    });
+}
+
+function getFavoriteCodes() {
+  return getDb().prepare('SELECT code FROM favorites').all().map((r) => r.code);
+}
+
+function isFavorite(code) {
+  return !!getDb().prepare('SELECT 1 AS x FROM favorites WHERE code = ?').get(code);
+}
+
 module.exports = {
   getDb,
   dbPath,
@@ -371,4 +446,10 @@ module.exports = {
   upsertFundamentals,
   getFundamentals,
   getStats,
+  upsertFavorite,
+  removeFavorite,
+  getFavorite,
+  getFavorites,
+  getFavoriteCodes,
+  isFavorite,
 };

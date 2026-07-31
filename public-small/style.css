@@ -264,3 +264,9 @@ td.clip {
 .live-filter input {
   min-width: 180px;
 }
+
+.fav-btn { border:0; background:transparent; cursor:pointer; font-size:18px; line-height:1; color:#c4b5a0; padding:2px 6px; }
+.fav-btn.on { color:#d97706; }
+.fav-btn:hover { transform: scale(1.08); }
+.fav-actions { display:flex; gap:6px; }
+.btn-danger { background:#fff; color:var(--danger); border:1px solid #f0c0bc; }
