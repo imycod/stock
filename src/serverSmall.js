@@ -595,6 +595,19 @@ app.get('/api/live/watchlist', (_req, res) => {
   });
 });
 
+
+app.get('/api/live/history', (req, res) => {
+  const code = String(req.query.code || '').trim();
+  if (!code) return res.status(400).json({ ok: false, error: '缺少 code' });
+  const date = String(req.query.date || '').trim() || null;
+  try {
+    const bundle = smallCollector.getHistoryBundle(code, date);
+    res.json({ ok: true, ...bundle });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message || String(e) });
+  }
+});
+
 app.get('/api/live/latest', (req, res) => {
   const code = String(req.query.code || '').trim();
   if (!code) return res.status(400).json({ ok: false, error: '缺少 code' });

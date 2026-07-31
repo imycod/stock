@@ -275,7 +275,22 @@ function getLatestSnapshots(codes = null) {
     .all();
 }
 
-function getMinuteSnapshots(code, tradeDate, limit = 500) {
+
+function getSnapshotDates(code) {
+  return getDb()
+    .prepare(
+      `SELECT trade_date AS tradeDate,
+              COUNT(*) AS count,
+              MAX(trade_time) AS lastTime
+       FROM minute_snapshots
+       WHERE code = ?
+       GROUP BY trade_date
+       ORDER BY trade_date DESC`
+    )
+    .all(code);
+}
+
+function getMinuteSnapshots(code, tradeDate, limit = 1000) {
   if (tradeDate) {
     return getDb()
       .prepare(
@@ -441,6 +456,7 @@ module.exports = {
   getLatestSnapshot,
   getLatestSnapshots,
   getMinuteSnapshots,
+  getSnapshotDates,
   upsertLhbRecord,
   getLhbRecords,
   upsertFundamentals,

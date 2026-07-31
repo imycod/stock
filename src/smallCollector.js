@@ -274,6 +274,26 @@ function mapLiveRow(row, name = '') {
   };
 }
 
+
+function getHistoryBundle(code, tradeDate = null) {
+  const watch = smallDb.getWatchlistStock(code);
+  const name = watch?.name || '';
+  const days = smallDb.getSnapshotDates(code);
+  let snapshots = [];
+  if (tradeDate) {
+    snapshots = smallDb
+      .getMinuteSnapshots(code, tradeDate, 1000)
+      .map((row) => mapLiveRow(row, name));
+  }
+  return {
+    code,
+    name,
+    days,
+    tradeDate: tradeDate || null,
+    snapshots,
+  };
+}
+
 function getLiveBundle(code) {
   const watch = smallDb.getWatchlistStock(code);
   const snap = smallDb.getLatestSnapshot(code);
@@ -339,6 +359,7 @@ module.exports = {
   watchAndCollect,
   mapLiveRow,
   getLiveBundle,
+  getHistoryBundle,
   startPolling,
   stopPolling,
   getPollStatus,

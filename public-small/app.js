@@ -1,6 +1,6 @@
 const $ = (s) => document.querySelector(s);
 
-const state = { polling: null, liveCode: null, liveTimer: null, liveIntervalSec: 60, liveRows: [], favoriteCodes: new Set(), favRows: [] };
+const state = { polling: null, liveCode: null, liveTimer: null, liveIntervalSec: 60, liveRows: [], liveExpand: {}, favoriteCodes: new Set(), favRows: [] };
 
 function showTab(name) {
   document.querySelectorAll('.tab').forEach((el) => {
@@ -133,6 +133,188 @@ function applyLiveFilter() {
   return filtered;
 }
 
+﻿async function fetchLiveDays(code) {
+  const data = await api('/api/live/history?code=' + encodeURIComponent(code));
+  return data.days || [];
+}
+
+async function fetchLiveMinutes(code, tradeDate) {
+  const data = await api(
+    '/api/live/history?code=' +
+      encodeURIComponent(code) +
+      '&date=' +
+      encodeURIComponent(tradeDate)
+  );
+  return data.snapshots || [];
+}
+
+function renderMinuteTable(rows) {
+  if (!rows.length) return '<div class="muted" style="padding:8px">该日暂无分钟数据</div>';
+  const head =
+    '<table class="live-minute-table"><thead><tr>' +
+    '<th>时间</th><th>现价</th><th>涨跌%</th><th>成交量</th><th>成交额</th><th>换手%</th><th>量比</th><th>振幅%</th><th>主力净流入</th><th>主动买</th><th>主动卖</th>' +
+    '</tr></thead><tbody>';
+  const body = rows
+    .map(function (r) {
+      const pct = r.pctChange;
+      const pctCls = pct > 0 ? 'up' : pct < 0 ? 'down' : '';
+      return (
+        '<tr>' +
+        '<td>' +
+        escapeHtml(r.tradeTime || '') +
+        '</td>' +
+        '<td class="' +
+        pctCls +
+        '">' +
+        fmt(r.price, 2) +
+        '</td>' +
+        '<td class="' +
+        pctCls +
+        '">' +
+        (pct == null ? '' : fmt(pct, 2)) +
+        '</td>' +
+        '<td>' +
+        fmtAmt(r.volume) +
+        '</td>' +
+        '<td>' +
+        fmtAmt(r.amount) +
+        '</td>' +
+        '<td>' +
+        (r.turnoverRate != null ? fmt(r.turnoverRate, 2) : '') +
+        '</td>' +
+        '<td>' +
+        fmt(r.volumeRatio, 2) +
+        '</td>' +
+        '<td>' +
+        (r.amplitude != null ? fmt(r.amplitude, 2) : '') +
+        '</td>' +
+        '<td>' +
+        fmtAmt(r.mainNetInflow) +
+        '</td>' +
+        '<td>' +
+        fmtAmt(r.activeBuyVolume) +
+        '</td>' +
+        '<td>' +
+        fmtAmt(r.activeSellVolume) +
+        '</td>' +
+        '</tr>'
+      );
+    })
+    .join('');
+  return '<div class="live-minute-wrap">' + head + body + '</tbody></table></div>';
+}
+
+function renderDayBlocks(code, days, dayCache) {
+  if (!days.length) {
+    return '<div class="muted">暂无入库的分钟快照（交易时段会按间隔采集）</div>';
+  }
+  return days
+    .map(function (d) {
+      const date = d.tradeDate;
+      const open = !!(dayCache && dayCache[date] && dayCache[date].open);
+      const rows = (dayCache && dayCache[date] && dayCache[date].rows) || [];
+      const body = open
+        ? dayCache[date].loading
+          ? '<div class="muted" style="padding:8px">加载中…</div>'
+          : renderMinuteTable(rows)
+        : '';
+      return (
+        '<div class="live-day" data-code="' +
+        escapeHtml(code) +
+        '" data-date="' +
+        escapeHtml(date) +
+        '">' +
+        '<div class="live-day-head">' +
+        '<span class="arrow">' +
+        (open ? '▼' : '▶') +
+        '</span>' +
+        '<strong>' +
+        escapeHtml(date) +
+        '</strong>' +
+        '<span class="muted">' +
+        (d.count || 0) +
+        ' 条</span>' +
+        '<span class="muted">末笔 ' +
+        escapeHtml(d.lastTime || '') +
+        '</span>' +
+        '</div>' +
+        (open ? body : '') +
+        '</div>'
+      );
+    })
+    .join('');
+}
+
+async function toggleLiveExpand(code) {
+  const cur = state.liveExpand[code] || { open: false, days: [], dayCache: {} };
+  if (cur.open) {
+    cur.open = false;
+    state.liveExpand[code] = cur;
+    applyLiveFilter();
+    return;
+  }
+  cur.open = true;
+  cur.loading = true;
+  state.liveExpand[code] = cur;
+  applyLiveFilter();
+  try {
+    cur.days = await fetchLiveDays(code);
+  } catch (e) {
+    cur.open = false;
+    alert(e.message);
+  } finally {
+    cur.loading = false;
+    state.liveExpand[code] = cur;
+    applyLiveFilter();
+  }
+}
+
+async function toggleLiveDay(code, tradeDate) {
+  const cur = state.liveExpand[code];
+  if (!cur) return;
+  cur.dayCache = cur.dayCache || {};
+  const slot = cur.dayCache[tradeDate] || { open: false, rows: [], loading: false };
+  if (slot.open) {
+    slot.open = false;
+    cur.dayCache[tradeDate] = slot;
+    state.liveExpand[code] = cur;
+    applyLiveFilter();
+    return;
+  }
+  slot.open = true;
+  slot.loading = true;
+  cur.dayCache[tradeDate] = slot;
+  state.liveExpand[code] = cur;
+  applyLiveFilter();
+  try {
+    slot.rows = await fetchLiveMinutes(code, tradeDate);
+  } catch (e) {
+    slot.open = false;
+    alert(e.message);
+  } finally {
+    slot.loading = false;
+    cur.dayCache[tradeDate] = slot;
+    state.liveExpand[code] = cur;
+    applyLiveFilter();
+  }
+}
+
+function bindLiveExpandEvents(tbody) {
+  tbody.querySelectorAll('.live-expand').forEach(function (btn) {
+    btn.addEventListener('click', function (e) {
+      e.preventDefault();
+      toggleLiveExpand(btn.getAttribute('data-code')).catch(alert);
+    });
+  });
+  tbody.querySelectorAll('.live-day-head').forEach(function (head) {
+    head.addEventListener('click', function () {
+      const box = head.closest('.live-day');
+      if (!box) return;
+      toggleLiveDay(box.getAttribute('data-code'), box.getAttribute('data-date')).catch(alert);
+    });
+  });
+}
+
 function renderLiveWatchTable(rows) {
   const tbody = $('#liveTable tbody');
   if (!tbody) return;
@@ -141,32 +323,94 @@ function renderLiveWatchTable(rows) {
     const tip = hasAll
       ? '无匹配监控标的，请调整名称/代码筛选'
       : '监控列表为空。检索股票或运行筛选后会自动加入。';
-    tbody.innerHTML = '<tr><td colspan="15">' + tip + '</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="16">' + tip + '</td></tr>';
     return;
   }
-  tbody.innerHTML = rows.map((w) => {
-    const L = w.live || {};
-    const pct = L.pctChange;
-    const pctCls = pct > 0 ? 'up' : pct < 0 ? 'down' : '';
-    return '<tr>' +
-      '<td>' + escapeHtml(w.code) + '</td>' +
-      '<td>' + escapeHtml(w.name || '') + '</td>' +
-      '<td>' + escapeHtml(w.source || '') + '</td>' +
-      '<td class="' + pctCls + '">' + fmt(L.price, 2) + '</td>' +
-      '<td class="' + pctCls + '">' + (pct == null ? '' : fmt(pct, 2)) + '</td>' +
-      '<td>' + fmtAmt(L.volume) + '</td>' +
-      '<td>' + fmtAmt(L.amount) + '</td>' +
-      '<td>' + (L.turnoverRate != null ? fmt(L.turnoverRate, 2) : '') + '</td>' +
-      '<td>' + fmt(L.volumeRatio, 2) + '</td>' +
-      '<td>' + fmtAmt(L.mainNetInflow) + '</td>' +
-      '<td>' + fmtAmt(L.activeBuyVolume) + '</td>' +
-      '<td>' + fmtAmt(L.activeSellVolume) + '</td>' +
-      '<td>' + fmtAmt(L.mainBuy) + '</td>' +
-      '<td>' + fmtAmt(L.mainSell) + '</td>' +
-      '<td>' + escapeHtml((L.tradeDate || '') + ' ' + (L.tradeTime || '')) + '</td>' +
-      '</tr>';
-  }).join('');
+  tbody.innerHTML = rows
+    .map(function (w) {
+      const L = w.live || {};
+      const pct = L.pctChange;
+      const pctCls = pct > 0 ? 'up' : pct < 0 ? 'down' : '';
+      const exp = state.liveExpand[w.code] || {};
+      const open = !!exp.open;
+      const main =
+        '<tr data-code="' +
+        escapeHtml(w.code) +
+        '">' +
+        '<td><button type="button" class="live-expand' +
+        (open ? ' open' : '') +
+        '" data-code="' +
+        escapeHtml(w.code) +
+        '" title="展开分钟数据">' +
+        (open ? '▼' : '▶') +
+        '</button></td>' +
+        '<td>' +
+        escapeHtml(w.code) +
+        '</td>' +
+        '<td>' +
+        escapeHtml(w.name || '') +
+        '</td>' +
+        '<td>' +
+        escapeHtml(w.source || '') +
+        '</td>' +
+        '<td class="' +
+        pctCls +
+        '">' +
+        fmt(L.price, 2) +
+        '</td>' +
+        '<td class="' +
+        pctCls +
+        '">' +
+        (pct == null ? '' : fmt(pct, 2)) +
+        '</td>' +
+        '<td>' +
+        fmtAmt(L.volume) +
+        '</td>' +
+        '<td>' +
+        fmtAmt(L.amount) +
+        '</td>' +
+        '<td>' +
+        (L.turnoverRate != null ? fmt(L.turnoverRate, 2) : '') +
+        '</td>' +
+        '<td>' +
+        fmt(L.volumeRatio, 2) +
+        '</td>' +
+        '<td>' +
+        fmtAmt(L.mainNetInflow) +
+        '</td>' +
+        '<td>' +
+        fmtAmt(L.activeBuyVolume) +
+        '</td>' +
+        '<td>' +
+        fmtAmt(L.activeSellVolume) +
+        '</td>' +
+        '<td>' +
+        fmtAmt(L.mainBuy) +
+        '</td>' +
+        '<td>' +
+        fmtAmt(L.mainSell) +
+        '</td>' +
+        '<td>' +
+        escapeHtml((L.tradeDate || '') + ' ' + (L.tradeTime || '')) +
+        '</td>' +
+        '</tr>';
+      if (!open) return main;
+      const detailInner = exp.loading
+        ? '<div class="muted">加载日期列表…</div>'
+        : renderDayBlocks(w.code, exp.days || [], exp.dayCache || {});
+      const detail =
+        '<tr class="live-detail-row" data-code="' +
+        escapeHtml(w.code) +
+        '">' +
+        '<td colspan="16">' +
+        detailInner +
+        '</td></tr>';
+      return main + detail;
+    })
+    .join('');
+  bindLiveExpandEvents(tbody);
 }
+
 
 async function loadLiveWatchlist() {
   const data = await api('/api/live/watchlist');
@@ -279,12 +523,11 @@ async function toggleFavorite(row) {
     });
     state.favoriteCodes = new Set(data.codes || []);
   }
-  document.querySelectorAll('.fav-btn[data-code]').forEach(function (btn) {
-    const c = btn.getAttribute('data-code');
+  document.querySelectorAll('.fav-check[data-code]').forEach(function (box) {
+    const c = box.getAttribute('data-code');
     const on = isFav(c);
-    btn.classList.toggle('on', on);
-    btn.title = on ? '取消收藏' : '收藏';
-    btn.textContent = on ? '★' : '☆';
+    box.checked = on;
+    box.title = on ? '取消收藏' : '收藏';
   });
   if ($('#tab-favorites') && $('#tab-favorites').classList.contains('active')) {
     await loadFavorites().catch(function () {});
@@ -298,7 +541,7 @@ function renderFavTable(rows) {
     const hasAll = (state.favRows || []).length > 0;
     tbody.innerHTML =
       '<tr><td colspan="11">' +
-      (hasAll ? '无匹配收藏，请调整名称/代码筛选' : '暂无收藏。可在筛选结果中点击 ★ 收藏') +
+      (hasAll ? '无匹配收藏，请调整名称/代码筛选' : '暂无收藏。可在筛选结果中勾选收藏') +
       '</td></tr>';
     return;
   }
@@ -373,7 +616,9 @@ function renderRows(rows) {
   tbody.innerHTML = rows
     .map((r) => {
       const stageCls = 'stage-' + (r.profitStage || '');
+      const favOn = isFav(r.code);
       return `<tr>
+        <td class="fav-cell"><input type="checkbox" class="fav-check" data-code="${escapeHtml(r.code)}" ${favOn ? 'checked' : ''} title="${favOn ? '取消收藏' : '收藏'}" /></td>
         <td>${escapeHtml(r.code)}</td>
         <td>${escapeHtml(r.name)}</td>
         <td>${escapeHtml(r.industry)}</td>
@@ -400,14 +645,17 @@ function renderRows(rows) {
       </tr>`;
     })
     .join('');
-  tbody.querySelectorAll('.fav-btn').forEach(function (btn) {
-    btn.addEventListener('click', async function (e) {
-      e.preventDefault();
-      const code = btn.getAttribute('data-code');
+  tbody.querySelectorAll('.fav-check').forEach(function (box) {
+    box.addEventListener('change', async function () {
+      const code = box.getAttribute('data-code');
       const full = (window.__lastResultRows || []).find(function (x) { return String(x.code) === String(code); });
+      const want = box.checked;
+      if (want === isFav(code)) return;
       try {
         await toggleFavorite(full || { code: code, name: '' });
+        box.checked = isFav(code);
       } catch (err) {
+        box.checked = isFav(code);
         alert(err.message);
       }
     });
