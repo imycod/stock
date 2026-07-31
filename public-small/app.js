@@ -1,6 +1,6 @@
 const $ = (s) => document.querySelector(s);
 
-const state = { polling: null, liveCode: null, liveTimer: null, liveListTimer: null, liveIntervalSec: 60, liveRows: [], liveExpand: {}, favoriteCodes: new Set(), favRows: [], aiConfig: null, aiSession: null, aiBound: false };
+const state = { polling: null, liveCode: null, liveTimer: null, liveListTimer: null, liveIntervalSec: 60, liveRows: [], liveExpand: {}, favoriteCodes: new Set(), favRows: [], aiConfig: null, aiSession: null, aiBound: false, aiBusy: false };
 
 function showTab(name) {
   document.querySelectorAll('.tab').forEach((el) => {
@@ -133,7 +133,7 @@ function applyLiveFilter() {
   return filtered;
 }
 
-﻿async function fetchLiveDays(code) {
+async function fetchLiveDays(code) {
   const data = await api('/api/live/history?code=' + encodeURIComponent(code));
   return data.days || [];
 }
@@ -304,7 +304,7 @@ function bindLiveExpandEvents(tbody) {
     btn.addEventListener('click', function (e) {
       e.preventDefault();
       e.stopPropagation();
-      openAiModal(btn.getAttribute('data-code'), btn.getAttribute('data-name'));
+      openAiModal(btn.getAttribute('data-code'), btn.getAttribute('data-name')).catch(alert);
     });
   });
   tbody.querySelectorAll('.live-expand').forEach(function (btn) {
@@ -425,7 +425,7 @@ function renderLiveWatchTable(rows) {
 
 
 
-﻿async function loadAiConfig() {
+async function loadAiConfig() {
   try {
     const data = await api('/api/ai/config');
     state.aiConfig = data;
@@ -465,18 +465,21 @@ function renderAiPresets() {
   });
 }
 
-function openAiModal(code, name) {
+async function openAiModal(code, name) {
+  bindAiModalEvents();
+  await loadAiConfig();
   state.aiSession = { code: code, name: name || '', messages: [] };
   const modal = $('#aiModal');
   if (!modal) return;
   modal.classList.remove('hidden');
+  if (state.aiBusy) state.aiBusy = false;
   $('#aiModalTitle').textContent = 'AI 分析 · ' + code + ' ' + (name || '');
   const cfg = state.aiConfig || {};
   $('#aiModalSub').textContent = '基于实时监控入库的分钟快照，与模型多轮对话';
   $('#aiModelHint').textContent = '模型: ' + (cfg.model || 'glm-4.7-flash');
   $('#aiKeyHint').textContent = cfg.configured
     ? 'API Key 已配置'
-    : '未配置 ZHIPU_API_KEY，发送前请先在环境变量或 config.ai.apiKey 中设置';
+    : '未配置 ZHIPU_API_KEY。请在项目根目录 .env 写入 ZHIPU_API_KEY=xxx 后重启 3010 服务';
   $('#aiKeyHint').style.color = cfg.configured ? '' : 'var(--danger)';
   const days = cfg.defaultDays || 5;
   if ($('#aiDays')) $('#aiDays').value = days;
@@ -500,15 +503,25 @@ function closeAiModal() {
 async function sendAiChat(questionOverride) {
   const session = state.aiSession;
   if (!session || !session.code) return;
+  if (state.aiBusy) return;
   const question = String(questionOverride || ($('#aiInput') && $('#aiInput').value) || '').trim();
   if (!question) return alert('请输入问题');
+  if (state.aiConfig && state.aiConfig.configured === false) {
+    await loadAiConfig();
+    if (!state.aiConfig.configured) {
+      return alert('服务未读到 API Key。请确认项目根目录 .env 有 ZHIPU_API_KEY=... 并已重启 npm run start:small');
+    }
+  }
   const days = Number(($('#aiDays') && $('#aiDays').value) || (state.aiConfig && state.aiConfig.defaultDays) || 5);
+  state.aiBusy = true;
+  if ($('#btnAiSend')) $('#btnAiSend').disabled = true;
   appendAiMsg('user', question);
   if ($('#aiInput')) $('#aiInput').value = '';
   const loading = document.createElement('div');
   loading.className = 'ai-msg system';
-  loading.textContent = '分析中…（附带近 ' + days + ' 日分钟数据）';
+  loading.textContent = '分析中…（附带近 ' + days + ' 日分钟数据，高峰期可能自动重试）';
   $('#aiChat').appendChild(loading);
+  $('#aiChat').scrollTop = $('#aiChat').scrollHeight;
 
   try {
     const data = await api('/api/ai/chat', {
@@ -532,37 +545,42 @@ async function sendAiChat(questionOverride) {
           ' · ' +
           data.meta.rowCount +
           ' 条' +
-          (data.meta.truncated ? '（已截断）' : '')
+          (data.meta.truncated ? '（已截断）' : '') +
+          (data.model ? ' · ' + data.model : '')
       );
     }
   } catch (e) {
-    loading.textContent = '失败: ' + (e.message || e);
+    loading.className = 'ai-msg system';
+    loading.textContent = '失败: ' + (e.message || e) + '（若提示访问量过大，请稍等几秒再问）';
+  } finally {
+    state.aiBusy = false;
+    if ($('#btnAiSend')) $('#btnAiSend').disabled = false;
   }
 }
 
+
 function bindAiModalEvents() {
-  if (state.aiBound) return;
-  state.aiBound = true;
-  if ($('#btnAiClose')) $('#btnAiClose').addEventListener('click', closeAiModal);
-  const modal = $('#aiModal');
-  if (modal) {
-    modal.addEventListener('click', function (e) {
-      if (e.target && e.target.getAttribute('data-close') === '1') closeAiModal();
-    });
+  const closeBtn = $('#btnAiClose');
+  if (closeBtn) closeBtn.onclick = function () { closeAiModal(); };
+  // 蒙层不关闭，避免误触丢失对话；仅关闭按钮可关
+  const sendBtn = $('#btnAiSend');
+  if (sendBtn) {
+    sendBtn.onclick = function (e) {
+      e.preventDefault();
+      sendAiChat().catch(function (err) { alert(err.message || err); });
+    };
   }
-  if ($('#btnAiSend')) {
-    $('#btnAiSend').addEventListener('click', function () {
-      sendAiChat().catch(alert);
-    });
-  }
-  if ($('#aiInput')) {
-    $('#aiInput').addEventListener('keydown', function (e) {
+  const input = $('#aiInput');
+  if (input && !input.dataset.aiKeyBound) {
+    input.dataset.aiKeyBound = '1';
+    input.addEventListener('keydown', function (e) {
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
-        sendAiChat().catch(alert);
+        sendAiChat().catch(function (err) { alert(err.message || err); });
       }
     });
   }
+  state.aiBound = true;
 }
 
 
@@ -1133,6 +1151,8 @@ async function init() {
   });
 
   await loadFavoriteCodes();
+  await loadAiConfig();
+  bindAiModalEvents();
   const cfg = await api('/api/config');
   fillConfigForm(cfg.config);
   if (cfg.liveConfig?.pollIntervalSec) state.liveIntervalSec = cfg.liveConfig.pollIntervalSec;
