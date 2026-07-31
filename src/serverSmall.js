@@ -120,11 +120,22 @@ function mapRow(r) {
     mainProducts: r.mainProducts || '',
     partners: r.partners || '',
     businessBrief: r.businessBrief || '',
+    employeeNum: r.employeeNum ?? null,
+    province: r.province || '',
+    outboundInvest: r.outboundInvest || '',
     isST: !!r.isST,
     stType: r.stType || '',
     stDate: r.stDate || '',
     stReason: r.stReason || '',
     stRemoveEstimate: r.stRemoveEstimate || '',
+    justUncapped: !!r.justUncapped,
+    uncapLabel: r.justUncapped ? '刚摘帽' : r.uncapDate ? '曾摘帽' : '',
+    uncapDate: r.uncapDate || '',
+    uncapTitle: r.uncapTitle || '',
+    hasAbnormal: !!r.hasAbnormal,
+    abnormalCount: r.abnormalCount || 0,
+    lastAbnormalDate: r.lastAbnormalDate || '',
+    abnormalSummary: r.abnormalSummary || '',
     reasons: r.reasons || '',
   };
 }
@@ -153,6 +164,7 @@ async function startScreen(opts) {
       });
       lastResult = {
         ...result,
+        market: result.market || null,
         rows: result.rows.map(mapRow),
       };
       persistResult(lastResult);
@@ -239,6 +251,8 @@ app.get('/api/screen/result', (req, res) => {
   const q = String(req.query.q || '').trim().toLowerCase();
   const stage = String(req.query.stage || '').trim();
   const focus = String(req.query.focus || '').trim();
+  const uncapped = String(req.query.uncapped || '').trim();
+  const abnormal = String(req.query.abnormal || '').trim();
   let rows = lastResult.rows;
   if (q) {
     rows = rows.filter(
@@ -249,12 +263,19 @@ app.get('/api/screen/result', (req, res) => {
   }
   if (stage) rows = rows.filter((r) => r.profitStage === stage);
   if (focus) rows = rows.filter((r) => r.holdFocus === focus);
+  if (uncapped === '1' || uncapped === 'true') rows = rows.filter((r) => r.justUncapped);
+  if (abnormal === '1' || abnormal === 'true') rows = rows.filter((r) => r.hasAbnormal);
+  rows = rows.map((r) => ({
+    ...r,
+    uncapLabel: r.uncapLabel || (r.justUncapped ? '刚摘帽' : r.uncapDate ? '曾摘帽' : ''),
+  }));
 
   res.json({
     ok: true,
     empty: false,
     generatedAt: lastResult.generatedAt,
     stats: lastResult.stats,
+    market: lastResult.market || null,
     opts: publicConfig(lastResult.opts || loadRuntimeConfig()),
     rows,
     total: rows.length,

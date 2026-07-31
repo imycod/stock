@@ -1,8 +1,6 @@
 const $ = (s) => document.querySelector(s);
 
-const state = {
-  polling: null,
-};
+const state = { polling: null };
 
 function showTab(name) {
   document.querySelectorAll('.tab').forEach((el) => {
@@ -47,6 +45,35 @@ async function api(url, opts) {
   return data;
 }
 
+function renderMarket(m) {
+  const box = $('#marketBox');
+  if (!m) {
+    box.className = 'market-box';
+    box.textContent = '大盘：暂无';
+    return;
+  }
+  const icon = m.weather === '太阳' ? '☀' : m.weather === '乌云下雨' ? '☔' : m.weather === '乌云' ? '☁' : '🌥';
+  box.className =
+    'market-box ' +
+    (m.weather === '太阳' ? 'sun' : /乌云/.test(m.weather || '') ? 'rain' : 'cloud');
+  box.innerHTML =
+    icon +
+    ' ' +
+    escapeHtml(m.weather) +
+    ' · ' +
+    escapeHtml(m.indexName || '上证') +
+    ' ' +
+    escapeHtml(fmt(m.indexPrice, 2)) +
+    ' (' +
+    (m.indexPctChange > 0 ? '+' : '') +
+    escapeHtml(fmt(m.indexPctChange, 2)) +
+    '%)' +
+    '<br/><span style="opacity:.8">' +
+    escapeHtml(m.weatherLabel || '') +
+    (m.indexVolShrink ? ' · 缩量' : '') +
+    '</span>';
+}
+
 function fillConfigForm(cfg) {
   const form = $('#configForm');
   form.maxTotalSharesYi.value = cfg.maxTotalSharesYi;
@@ -78,7 +105,7 @@ function readConfigForm() {
 function renderRows(rows) {
   const tbody = $('#resultTable tbody');
   if (!rows.length) {
-    tbody.innerHTML = '<tr><td colspan="15">无匹配结果</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="23">无匹配结果</td></tr>';
     return;
   }
   tbody.innerHTML = rows
@@ -87,19 +114,27 @@ function renderRows(rows) {
       return `<tr>
         <td>${escapeHtml(r.code)}</td>
         <td>${escapeHtml(r.name)}</td>
+        <td>${escapeHtml(r.industry)}</td>
         <td class="${stageCls}">${escapeHtml(r.profitStage)}</td>
         <td>${escapeHtml(r.holdFocus)}</td>
         <td>${r.holderNum ?? ''}</td>
         <td>${fmt(r.top10Ratio, 1)}</td>
         <td>${fmt(r.marketCapYi)}</td>
-        <td>${fmt(r.totalSharesYi)}</td>
+        <td>${r.employeeNum ?? ''}</td>
+        <td>${escapeHtml(r.province)}</td>
         <td class="clip" title="${escapeHtml(r.financeSummary)}">${escapeHtml(r.financeSummary)}</td>
         <td class="clip" title="${escapeHtml(r.mainProducts)}">${escapeHtml(r.mainProducts)}</td>
         <td class="clip" title="${escapeHtml(r.partners)}">${escapeHtml(r.partners)}</td>
-        <td class="${r.isST ? 'st-yes' : ''}">${r.isST ? escapeHtml(r.stType || '是') : ''}</td>
+        <td class="clip" title="${escapeHtml(r.outboundInvest)}">${escapeHtml(r.outboundInvest)}</td>
+        <td class="${r.isST ? 'yes' : ''}">${r.isST ? escapeHtml(r.stType || '是') : ''}</td>
         <td>${escapeHtml(r.stDate)}</td>
         <td class="clip" title="${escapeHtml(r.stReason)}">${escapeHtml(r.stReason)}</td>
-        <td class="clip" title="${escapeHtml(r.stRemoveEstimate)}">${escapeHtml(r.stRemoveEstimate)}</td>
+        <td class="${r.justUncapped ? 'ok' : ''}">${escapeHtml(r.uncapLabel || (r.justUncapped ? '刚摘帽' : r.uncapDate ? '曾摘帽' : ''))}</td>
+        <td title="${escapeHtml(r.uncapTitle)}">${escapeHtml(r.uncapDate)}</td>
+        <td class="${r.hasAbnormal ? 'yes' : ''}">${r.hasAbnormal ? '有' : ''}</td>
+        <td>${r.abnormalCount || ''}</td>
+        <td>${escapeHtml(r.lastAbnormalDate)}</td>
+        <td class="clip" title="${escapeHtml(r.abnormalSummary)}">${escapeHtml(r.abnormalSummary)}</td>
       </tr>`;
     })
     .join('');
@@ -109,11 +144,16 @@ async function loadResult() {
   const q = $('#filterQ').value.trim();
   const stage = $('#filterStage').value;
   const focus = $('#filterFocus').value;
+  const uncapped = $('#filterUncapped').value;
+  const abnormal = $('#filterAbnormal').value;
   const params = new URLSearchParams();
   if (q) params.set('q', q);
   if (stage) params.set('stage', stage);
   if (focus) params.set('focus', focus);
+  if (uncapped) params.set('uncapped', uncapped);
+  if (abnormal) params.set('abnormal', abnormal);
   const data = await api('/api/screen/result?' + params.toString());
+  renderMarket(data.market);
   if (data.empty) {
     $('#stats').textContent = '尚无缓存结果，请点击「刷新数据」开始抓取。';
     renderRows([]);
@@ -123,8 +163,10 @@ async function loadResult() {
   const stages = st.stageCount
     ? Object.entries(st.stageCount).map(([k, v]) => k + v).join(' / ')
     : '';
+  const uncapN = (data.rows || []).filter((r) => r.justUncapped).length;
+  const abnN = (data.rows || []).filter((r) => r.hasAbnormal).length;
   $('#stats').textContent =
-    `共 ${data.total}/${data.allTotal} 只 · 生成于 ${new Date(data.generatedAt).toLocaleString('zh-CN')} · ST ${st.stCount || 0} · ${stages}`;
+    `共 ${data.total}/${data.allTotal} 只 · 生成于 ${new Date(data.generatedAt).toLocaleString('zh-CN')} · ST ${st.stCount || 0} · 当前筛选内刚摘帽 ${uncapN} · 有异动 ${abnN} · ${stages}`;
   renderRows(data.rows);
   return data;
 }
@@ -139,8 +181,7 @@ async function pollUntilDone() {
         const s = await api('/api/screen/status');
         const p = s.job.progress || {};
         const msg = p.message || p.stage || '筛选中';
-        const prog =
-          p.total > 0 ? ` ${p.done || 0}/${p.total}` : '';
+        const prog = p.total > 0 ? ` ${p.done || 0}/${p.total}` : '';
         setLoading(true, msg + prog);
         setBadge('running', '筛选中');
         if (s.job.status === 'done') {

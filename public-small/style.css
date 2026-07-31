@@ -184,3 +184,18 @@ td.clip {
   animation: spin 0.8s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+.market-box {
+  min-width: 220px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: #fff;
+  border: 1px solid var(--line);
+  font-size: 13px;
+  line-height: 1.35;
+}
+.market-box.sun { background: #fff7ed; border-color: #fdba74; color: #9a3412; }
+.market-box.rain { background: #eef2ff; border-color: #a5b4fc; color: #312e81; }
+.market-box.cloud { background: #f3f4f6; color: #374151; }
+.yes { color: var(--danger); font-weight: 600; }
+.ok { color: #067647; font-weight: 600; }

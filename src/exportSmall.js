@@ -692,16 +692,305 @@ async function fetchStInfo(code, name) {
   };
 }
 
+
+async function fetchMarketWeather() {
+  const headers = { ...HEADERS, Referer: 'https://quote.eastmoney.com/' };
+  let quote = null;
+  for (const host of CLIST_HOSTS) {
+    try {
+      const url =
+        `${host}/api/qt/stock/get?secid=1.000001&invt=2&fltt=2` +
+        '&fields=f43,f47,f48,f57,f58,f60,f169,f170,f168,f50' +
+        '&ut=fa5fd1943c7b386f172d6893dbfba107&_=' +
+        Date.now();
+      const json = await fetchJson(url, headers, 12000, 2);
+      if (json.data) {
+        quote = json.data;
+        break;
+      }
+    } catch {
+      /* next */
+    }
+  }
+
+  let klines = [];
+  try {
+    klines = await fetchJson(
+      'https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData?symbol=sh000001&scale=240&ma=no&datalen=5',
+      { ...HEADERS, Referer: 'https://finance.sina.com.cn/' },
+      15000,
+      2
+    );
+  } catch {
+    klines = [];
+  }
+  if (!Array.isArray(klines)) klines = [];
+
+  const last = klines[klines.length - 1];
+  const prev = klines[klines.length - 2];
+  const price = num(quote?.f43) ?? num(last?.close);
+  const preClose = num(quote?.f60) ?? num(prev?.close);
+  const pctChange =
+    num(quote?.f170) ??
+    (price != null && preClose ? ((price - preClose) / preClose) * 100 : null);
+  const volToday = num(quote?.f47) ?? (last ? +last.volume / 100 : null);
+  const volPrev = prev ? +prev.volume / 100 : null;
+  const volShrink =
+    volToday != null && volPrev != null ? volToday < volPrev * 0.98 : false;
+  const volExpand =
+    volToday != null && volPrev != null ? volToday > volPrev * 1.02 : false;
+
+  let weather = '阴天';
+  let weatherLabel = '平淡';
+  if (pctChange != null && pctChange > 0.15) {
+    weather = '太阳';
+    weatherLabel = '大盘上涨';
+  } else if (pctChange != null && pctChange < -0.15 && volShrink) {
+    weather = '乌云下雨';
+    weatherLabel = '绿盘缩量下跌';
+  } else if (pctChange != null && pctChange < -0.15) {
+    weather = '乌云';
+    weatherLabel = '绿盘下跌';
+  } else if (volExpand && pctChange != null && pctChange <= 0) {
+    weather = '阴有风';
+    weatherLabel = '缩涨放量/震荡';
+  }
+
+  return {
+    indexCode: '000001',
+    indexName: quote?.f58 || '上证指数',
+    indexPrice: price,
+    indexPctChange: pctChange != null ? +pctChange.toFixed(2) : null,
+    indexVolume: volToday,
+    indexVolShrink: volShrink,
+    weather,
+    weatherLabel,
+    tradeDate: last?.day || '',
+  };
+}
+
+function daysBetween(dateStr) {
+  if (!dateStr) return null;
+  const t = Date.parse(String(dateStr).slice(0, 10));
+  if (!Number.isFinite(t)) return null;
+  return Math.floor((Date.now() - t) / 86400000);
+}
+
+async function fetchAnnouncementList(code, maxPages = 5) {
+  const anns = [];
+  for (let page = 1; page <= maxPages; page++) {
+    const url =
+      'https://np-anotice-stock.eastmoney.com/api/security/ann?' +
+      `sr=-1&page_size=50&page_index=${page}&ann_type=A&stock_list=${code}&f_node=0&s_node=0`;
+    try {
+      const json = await fetchJson(
+        url,
+        { ...HEADERS, Referer: 'https://data.eastmoney.com/' },
+        15000,
+        1
+      );
+      const list = json.data?.list || [];
+      if (!list.length) break;
+      for (const a of list) anns.push(a);
+    } catch {
+      break;
+    }
+  }
+  return anns;
+}
+
+async function fetchAnnExtras(code, name) {
+  const anns = await fetchAnnouncementList(code, isStName(name) ? 10 : 8);
+  const titleOf = (a) => String(a.title || '');
+  const dateOf = (a) => String(a.notice_date || '').slice(0, 10);
+
+  const isImpl = (t) =>
+    /实施.*(风险警示|ST)|被实施.*(风险警示|ST)|实行.*风险警示/.test(t) &&
+    !/进展|申请撤销|关于撤销/.test(t);
+  const isUncap = (t) =>
+    /撤销.*(风险警示|ST|警示)|摘帽|撤销退市风险/.test(t) &&
+    !/申请撤销|相关事项的进展|整改进展/.test(t);
+  const isAbnormal = (t) => /异动|异常波动|严重异常波动/.test(t);
+  const isInvest = (t) =>
+    /对外投资|投资设立|设立子公司|增资.*子公司|控股子公司|参股/.test(t);
+
+  const impl = anns.find((a) => isImpl(titleOf(a)));
+  const uncap = anns.find((a) => isUncap(titleOf(a)));
+  const removeApp = anns.find((a) => /申请撤销.*(风险警示|ST)/.test(titleOf(a)));
+  const abnormals = anns.filter((a) => isAbnormal(titleOf(a)));
+  const investAnns = anns.filter((a) => isInvest(titleOf(a))).slice(0, 5);
+
+  let stDate = impl ? dateOf(impl) : '';
+  let stReason = '';
+  let stAnnTitle = impl ? titleOf(impl).replace(/^[^:：]*[:：]/, '') : '';
+  let stRemoveEstimate = '';
+
+  if (impl?.art_code) {
+    try {
+      const detail = await fetchJson(
+        `https://np-cnotice-stock.eastmoney.com/api/content/ann?art_code=${impl.art_code}&client_source=web`,
+        { ...HEADERS, Referer: 'https://data.eastmoney.com/notices/' },
+        12000,
+        1
+      );
+      const content = String(detail.data?.notice_content || '').replace(/\s+/g, ' ');
+      const mDate =
+        content.match(/实施起始日[为是]?\s*(\d{4}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日)/) ||
+        content.match(/实施风险警示的起始日[:：]?\s*(\d{4}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日)/);
+      if (mDate) {
+        const p = mDate[1]
+          .replace(/\s+/g, '')
+          .replace(/年|月/g, '-')
+          .replace(/日/, '')
+          .split('-');
+        if (p.length === 3) {
+          stDate = `${p[0]}-${p[1].padStart(2, '0')}-${p[2].padStart(2, '0')}`;
+        }
+      }
+      const mReason =
+        content.match(/因([^。]{10,120}?)(?:根据|将被实施|公司股票将被实施)/) ||
+        content.match(/适用情形[\s\S]{0,40}?([\u4e00-\u9fa5A-Za-z0-9，,]{20,160}?)(?:根据|。)/);
+      if (mReason) stReason = mReason[1].replace(/\s+/g, '').slice(0, 120);
+    } catch {
+      /* ignore */
+    }
+  }
+  if (!stReason && stAnnTitle) stReason = stAnnTitle.slice(0, 80);
+
+  const uncapDate = uncap ? dateOf(uncap) : '';
+  const uncapDays = daysBetween(uncapDate);
+  const justUncapped = !!(uncapDate && uncapDays != null && uncapDays <= 730 && !isStName(name));
+
+  if (isStName(name)) {
+    if (removeApp && /申请撤销/.test(titleOf(removeApp))) {
+      stRemoveEstimate =
+        '已申请撤销（公告日 ' + dateOf(removeApp) + '）';
+    } else if (/内部控制|否定意见|审计/.test(stReason)) {
+      stRemoveEstimate = '整改完成且内控审计意见恢复后，关注年报披露后申请摘帽';
+    } else if (/净利润|亏损|财务/.test(stReason)) {
+      stRemoveEstimate = '扭亏并满足上市规则后，通常于下一年度报告披露后可申请摘帽';
+    } else if (stTypeOf(name).includes('*ST')) {
+      stRemoveEstimate = '消除退市风险情形后可申请撤销*ST，关注年报/进展公告';
+    } else {
+      stRemoveEstimate = '相关情形消除后可申请撤销ST，关注进展公告';
+    }
+  }
+
+  const lastAbn = abnormals[0];
+  const investFromAnn = investAnns
+    .map((a) => dateOf(a) + ' ' + titleOf(a).replace(/^[^:：]*[:：]/, ''))
+    .join('；');
+
+  return {
+    isST: isStName(name),
+    stType: stTypeOf(name),
+    stDate,
+    stReason,
+    stRemoveEstimate,
+    stAnnTitle,
+    justUncapped,
+    uncapDate,
+    uncapTitle: uncap ? titleOf(uncap).replace(/^[^:：]*[:：]/, '') : '',
+    hasAbnormal: abnormals.length > 0,
+    abnormalCount: abnormals.length,
+    lastAbnormalDate: lastAbn ? dateOf(lastAbn) : '',
+    abnormalSummary: abnormals
+      .slice(0, 3)
+      .map((a) => dateOf(a) + ' ' + titleOf(a).replace(/^[^:：]*[:：]/, ''))
+      .join('；'),
+    investFromAnn,
+  };
+}
+
+async function fetchInvestAndStaff(code, selfName = '') {
+  const prefix = marketCodePrefix(code);
+  const headers = {
+    ...HEADERS,
+    Referer: 'https://emweb.securities.eastmoney.com/',
+  };
+  let employeeNum = null;
+  let province = '';
+  let investInfo = '';
+  const parts = [];
+
+  try {
+    const company = await fetchJson(
+      `https://emweb.securities.eastmoney.com/PC_HSF10/CompanySurvey/PageAjax?code=${prefix}${code}`,
+      headers,
+      15000,
+      2
+    );
+    const jb = company.jbzl?.[0] || {};
+    employeeNum = num(jb.EMP_NUM) ?? num(jb.TATOLNUMBER);
+    province = jb.PROVINCE || '';
+  } catch {
+    /* optional */
+  }
+
+  try {
+    const news = await fetchJson(
+      `https://emweb.securities.eastmoney.com/PC_HSF10/CompanyBigNews/PageAjax?code=${prefix}${code}`,
+      headers,
+      15000,
+      1
+    );
+    const guars = (news.dwdb || [])
+      .map((x) => x.GUARANTEED_NAME)
+      .filter(Boolean);
+    const uniq = [...new Set(guars)].slice(0, 8);
+    if (uniq.length) parts.push('担保/关联方: ' + uniq.join('、'));
+  } catch {
+    /* optional */
+  }
+
+  try {
+    const op = await fetchJson(
+      `https://emweb.securities.eastmoney.com/PC_HSF10/OperationsRequired/PageAjax?code=${prefix}${code}`,
+      headers,
+      15000,
+      1
+    );
+    const hit = (op.hxtc || []).find((x) =>
+      /子公司|海外|投资|全球化/.test((x.KEYWORD || '') + (x.MAINPOINT_CONTENT || ''))
+    );
+    if (hit?.MAINPOINT_CONTENT) {
+      const text = String(hit.MAINPOINT_CONTENT);
+      const m = text.match(/设立([^。；]{4,80}?)(?:覆盖|等|，|。)/);
+      const names =
+        text.match(/[\u4e00-\u9fa5A-Za-z]{2,20}(?:子公司|有限公司|公司)/g) || [];
+      const cleaned = [...new Set(names)]
+        .filter((n) => !selfName || !n.includes(selfName))
+        .slice(0, 8);
+      if (cleaned.length) parts.push('布局: ' + cleaned.join('、'));
+      else if (m) parts.push('布局: ' + m[1]);
+    }
+  } catch {
+    /* optional */
+  }
+
+  investInfo = parts.join('；');
+  return { employeeNum, province, investInfo };
+}
+
 async function enrichFundamentals(row) {
-  const tasks = [
+  const [fin, biz, ann, staffInv] = await Promise.all([
     fetchAnnualFinance(row.code).catch(() => ({})),
     fetchCompanyBusiness(row.code, row.name).catch(() => ({})),
-  ];
-  if (isStName(row.name)) {
-    tasks.push(fetchStInfo(row.code, row.name).catch(() => ({ isST: true, stType: stTypeOf(row.name) })));
-  }
-  const [fin, biz, st] = await Promise.all(tasks);
-  return { ...row, ...fin, ...biz, ...(st || { isST: false }) };
+    fetchAnnExtras(row.code, row.name).catch(() => ({ isST: isStName(row.name) })),
+    fetchInvestAndStaff(row.code, row.name).catch(() => ({})),
+  ]);
+  const investMerged = [staffInv.investInfo, ann.investFromAnn]
+    .filter(Boolean)
+    .join('；');
+  return {
+    ...row,
+    ...fin,
+    ...biz,
+    ...ann,
+    employeeNum: staffInv.employeeNum ?? null,
+    province: staffInv.province || '',
+    outboundInvest: investMerged,
+  };
 }
 
 function buildExcelRows(rows) {
@@ -802,6 +1091,7 @@ async function runScreen(userOpts = {}, onProgress = () => {}) {
   };
 
   progress('clist', { message: '拉取主板行情' });
+  const marketWeather = await fetchMarketWeather().catch(() => null);
   const all = await fetchMainBoardList(!!opts.includeST);
   const sized = all.filter((r) => {
     if (!(r.marketCap > 0 && r.marketCap < opts.maxMarketCap)) return false;
@@ -888,6 +1178,7 @@ async function runScreen(userOpts = {}, onProgress = () => {}) {
 
   return {
     rows: enriched,
+    market: marketWeather,
     stats: {
       mainBoard: all.length,
       afterSize: sized.length,
