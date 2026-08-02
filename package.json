@@ -7,6 +7,7 @@
     "start": "node src/server.js",
     "collect": "node -e \"require('./src/collector').collectOnce()\"",
     "export:small": "node src/exportSmall.js",
+    "export:stock": "node src/exportStock.js",
     "start:small": "node src/serverSmall.js",
     "small": "node src/serverSmall.js"
   },
@@ -16,5 +17,6 @@
     "iconv-lite": "^0.7.3",
     "node-cron": "^3.0.3",
     "xlsx": "^0.18.5"
-  }
+  },
+  "packageManager": "pnpm@9.15.0+sha512.76e2379760a4328ec4415815bcd6628dee727af3779aaa4c914e3944156c4299921a89f976381ee107d41f12cfa4b66681ca9c718f0668fa0831ed4c6d8ba56c"
 }
