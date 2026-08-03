@@ -1,6 +1,6 @@
 const $ = (s) => document.querySelector(s);
 
-const state = { polling: null, liveCode: null, liveTimer: null, liveListTimer: null, liveIntervalSec: 60, liveRows: [], liveExpand: {}, favoriteCodes: new Set(), favRows: [], aiConfig: null, aiSession: null, aiBound: false, aiBusy: false };
+const state = { polling: null, liveCode: null, liveTimer: null, liveListTimer: null, liveIntervalSec: 60, liveRows: [], liveExpand: {}, favoriteCodes: new Set(), favRows: [], aiConfig: null, aiSession: null, aiBound: false, remarkSession: null, remarkBound: false, industries: [], industryComboBound: false, industryMarketLoaded: false, aiBusy: false };
 
 function showTab(name) {
   document.querySelectorAll('.tab').forEach((el) => {
@@ -307,6 +307,13 @@ function bindLiveExpandEvents(tbody) {
       openAiModal(btn.getAttribute('data-code'), btn.getAttribute('data-name')).catch(alert);
     });
   });
+  tbody.querySelectorAll('.btn-remark').forEach(function (btn) {
+    btn.addEventListener('click', function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      openRemarkModal(btn.getAttribute('data-code'), btn.getAttribute('data-name')).catch(alert);
+    });
+  });
   tbody.querySelectorAll('.live-expand').forEach(function (btn) {
     btn.addEventListener('click', function (e) {
       e.preventDefault();
@@ -330,7 +337,7 @@ function renderLiveWatchTable(rows) {
     const tip = hasAll
       ? '无匹配监控标的，请调整名称/代码筛选'
       : '监控列表为空。检索股票或运行筛选后会自动加入。';
-    tbody.innerHTML = '<tr><td colspan="17">' + tip + '</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="18">' + tip + '</td></tr>';
     return;
   }
   tbody.innerHTML = rows
@@ -405,6 +412,13 @@ function renderLiveWatchTable(rows) {
         '" data-name="' +
         escapeHtml(w.name || '') +
         '">分析</button></td>' +
+        '<td><button type="button" class="btn btn-secondary btn-sm btn-remark" data-code="' +
+        escapeHtml(w.code) +
+        '" data-name="' +
+        escapeHtml(w.name || '') +
+        '">备注' +
+        (w.remarkCount ? ' (' + w.remarkCount + ')' : '') +
+        '</button></td>' +
         '</tr>';
       if (!open) return main;
       const detailInner = exp.loading
@@ -414,7 +428,7 @@ function renderLiveWatchTable(rows) {
         '<tr class="live-detail-row" data-code="' +
         escapeHtml(w.code) +
         '">' +
-        '<td colspan="17">' +
+        '<td colspan="18">' +
         detailInner +
         '</td></tr>';
       return main + detail;
@@ -581,6 +595,148 @@ function bindAiModalEvents() {
     });
   }
   state.aiBound = true;
+}
+
+function todayShanghai() {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date());
+}
+
+async function openRemarkModal(code, name) {
+  bindRemarkModalEvents();
+  state.remarkSession = { code: code, name: name || '' };
+  const modal = $('#remarkModal');
+  if (!modal) return;
+  $('#remarkModalTitle').textContent = '备注 · ' + code + ' ' + (name || '');
+  modal.classList.remove('hidden');
+  await loadRemarkRows();
+}
+
+function closeRemarkModal() {
+  const modal = $('#remarkModal');
+  if (modal) modal.classList.add('hidden');
+}
+
+async function loadRemarkRows() {
+  if (!state.remarkSession || !state.remarkSession.code) return;
+  const code = state.remarkSession.code;
+  const data = await api('/api/remarks?code=' + encodeURIComponent(code));
+  const today = data.today || todayShanghai();
+  let rows = data.rows || [];
+  if (!rows.some(function (r) { return r.tradeDate === today; })) {
+    rows = [{ tradeDate: today, content: '', predictionOk: null, dayMove: null }].concat(rows);
+  }
+  renderRemarkTable(rows);
+}
+
+function renderRemarkTable(rows) {
+  const tbody = $('#remarkTable tbody');
+  if (!tbody) return;
+  tbody.innerHTML = (rows || [])
+    .map(function (r) {
+      const pred =
+        r.predictionOk === 1 || r.predictionOk === true
+          ? '1'
+          : r.predictionOk === 0 || r.predictionOk === false
+            ? '0'
+            : '';
+      const move = r.dayMove || '';
+      return (
+        '<tr data-date="' +
+        escapeHtml(r.tradeDate) +
+        '">' +
+        '<td class="remark-date">' +
+        escapeHtml(r.tradeDate) +
+        '</td>' +
+        '<td><textarea class="remark-content" rows="3" placeholder="AI 分析简要记录…">' +
+        escapeHtml(r.content || '') +
+        '</textarea></td>' +
+        '<td><select class="remark-pred">' +
+        '<option value=""' +
+        (pred === '' ? ' selected' : '') +
+        '>未评</option>' +
+        '<option value="1"' +
+        (pred === '1' ? ' selected' : '') +
+        '>正确</option>' +
+        '<option value="0"' +
+        (pred === '0' ? ' selected' : '') +
+        '>错误</option>' +
+        '</select></td>' +
+        '<td><select class="remark-move">' +
+        '<option value=""' +
+        (move === '' ? ' selected' : '') +
+        '>未填</option>' +
+        '<option value="up"' +
+        (move === 'up' ? ' selected' : '') +
+        '>涨</option>' +
+        '<option value="down"' +
+        (move === 'down' ? ' selected' : '') +
+        '>跌</option>' +
+        '<option value="flat"' +
+        (move === 'flat' ? ' selected' : '') +
+        '>平</option>' +
+        '</select></td>' +
+        '</tr>'
+      );
+    })
+    .join('');
+}
+
+async function saveRemarkRows() {
+  if (!state.remarkSession || !state.remarkSession.code) return;
+  const code = state.remarkSession.code;
+  const trs = Array.prototype.slice.call(document.querySelectorAll('#remarkTable tbody tr'));
+  for (let i = 0; i < trs.length; i++) {
+    const tr = trs[i];
+    const tradeDate = tr.getAttribute('data-date');
+    if (!tradeDate) continue;
+    const content = tr.querySelector('.remark-content').value;
+    const predVal = tr.querySelector('.remark-pred').value;
+    const moveVal = tr.querySelector('.remark-move').value;
+    const isEmpty =
+      !String(content || '').trim() && predVal === '' && (moveVal === '' || moveVal == null);
+    if (isEmpty) {
+      await api('/api/remarks/' + encodeURIComponent(code) + '/' + encodeURIComponent(tradeDate), {
+        method: 'DELETE',
+      });
+      continue;
+    }
+    await api('/api/remarks', {
+      method: 'POST',
+      body: JSON.stringify({
+        code: code,
+        tradeDate: tradeDate,
+        content: content,
+        predictionOk: predVal === '' ? null : Number(predVal),
+        dayMove: moveVal || null,
+      }),
+    });
+  }
+  alert('已保存');
+  await loadRemarkRows();
+  try {
+    if (typeof loadLiveWatchlist === 'function') {
+      await loadLiveWatchlist();
+    }
+  } catch (e) {
+    /* ignore refresh errors */
+  }
+}
+
+function bindRemarkModalEvents() {
+  if (state.remarkBound) return;
+  const closeBtn = $('#btnRemarkClose');
+  if (closeBtn) closeBtn.onclick = function () { closeRemarkModal(); };
+  const saveBtn = $('#btnRemarkSave');
+  if (saveBtn) {
+    saveBtn.onclick = function () {
+      saveRemarkRows().catch(function (e) { alert(e.message || e); });
+    };
+  }
+  const backdrop = document.querySelector('#remarkModal .modal-backdrop');
+  if (backdrop) {
+    backdrop.addEventListener('click', function () { closeRemarkModal(); });
+  }
+  state.remarkBound = true;
 }
 
 
@@ -859,23 +1015,172 @@ function renderRows(rows) {
 }
 
 
+function readIndustryFilter() {
+  const el = $('#filterIndustry');
+  return el ? String(el.value || '').trim() : '';
+}
+
 function readCompoundFilters() {
   return {
     stage: $('#filterStage').value.trim(),
     focus: $('#filterFocus').value.trim(),
     uncapped: $('#filterUncapped').value,
     abnormal: $('#filterAbnormal').value,
+    industry: readIndustryFilter(),
   };
 }
 
 function hasCompoundFiltersClient(f) {
-  return !!(f.stage || f.focus || f.uncapped === '1' || f.abnormal === '1');
+  return !!(f.stage || f.focus || f.industry || f.uncapped === '1' || f.abnormal === '1');
+}
+
+/* ---------- industry searchable combo ---------- */
+state.industries = state.industries || [];
+state.industryComboBound = false;
+
+async function loadIndustries(forceMarket) {
+  try {
+    const qs = forceMarket ? '?market=1' : '';
+    const data = await api('/api/screen/industries' + qs);
+    state.industries = data.industries || [];
+    if (forceMarket) state.industryMarketLoaded = true;
+    renderIndustryOptions(readIndustryFilter());
+    return state.industries;
+  } catch (e) {
+    console.warn('loadIndustries', e.message || e);
+    return state.industries || [];
+  }
+}
+
+function renderIndustryOptions(query) {
+  const list = $('#industryOptions');
+  if (!list) return;
+  const q = String(query || '').trim().toLowerCase();
+  const all = state.industries || [];
+  const items = q ? all.filter((x) => x.toLowerCase().includes(q)) : all.slice();
+  if (!items.length) {
+    list.innerHTML = '<li class="muted">' + (all.length ? '无匹配行业' : '暂无行业列表，稍后自动加载') + '</li>';
+    return;
+  }
+  const max = 80;
+  list.innerHTML = items
+    .slice(0, max)
+    .map((name) => '<li role="option" data-value="' + escapeHtml(name) + '">' + escapeHtml(name) + '</li>')
+    .join('');
+  if (items.length > max) {
+    list.innerHTML += '<li class="muted">仅显示前 ' + max + ' 项，请继续输入缩小范围</li>';
+  }
+}
+
+function openIndustryCombo() {
+  const list = $('#industryOptions');
+  if (!list) return;
+  renderIndustryOptions(readIndustryFilter());
+  list.classList.remove('hidden');
+  if (!state.industryMarketLoaded) loadIndustries(true).catch(() => {});
+  else if (!(state.industries || []).length) loadIndustries(true).catch(() => {});
+}
+
+function closeIndustryCombo() {
+  const list = $('#industryOptions');
+  if (list) list.classList.add('hidden');
+}
+
+function bindIndustryCombo() {
+  if (state.industryComboBound) return;
+  const input = $('#filterIndustry');
+  const caret = $('#industryCaret');
+  const list = $('#industryOptions');
+  const wrap = $('#industryCombo');
+  if (!input || !list || !wrap) return;
+  state.industryComboBound = true;
+
+  input.addEventListener('focus', () => openIndustryCombo());
+  input.addEventListener('input', () => {
+    renderIndustryOptions(input.value);
+    list.classList.remove('hidden');
+  });
+  input.addEventListener('keydown', (e) => {
+    const visible = [...list.querySelectorAll('li[data-value]')];
+    let idx = visible.findIndex((li) => li.classList.contains('active'));
+    if (e.key === 'Escape') {
+      closeIndustryCombo();
+      return;
+    }
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      list.classList.remove('hidden');
+      if (!visible.length) return;
+      if (idx >= 0) visible[idx].classList.remove('active');
+      idx = Math.min(visible.length - 1, idx + 1);
+      visible[idx].classList.add('active');
+      visible[idx].scrollIntoView({ block: 'nearest' });
+      return;
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (!visible.length) return;
+      if (idx >= 0) visible[idx].classList.remove('active');
+      idx = Math.max(0, idx - 1);
+      visible[idx].classList.add('active');
+      visible[idx].scrollIntoView({ block: 'nearest' });
+      return;
+    }
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      if (idx >= 0 && visible[idx]) input.value = visible[idx].dataset.value || input.value;
+      closeIndustryCombo();
+      searchWithFallback().catch(alert);
+    }
+  });
+  if (caret) {
+    caret.addEventListener('click', (e) => {
+      e.preventDefault();
+      if (list.classList.contains('hidden')) {
+        openIndustryCombo();
+        input.focus();
+      } else closeIndustryCombo();
+    });
+  }
+  list.addEventListener('mousedown', (e) => {
+    const li = e.target.closest('li[data-value]');
+    if (!li) return;
+    e.preventDefault();
+    input.value = li.dataset.value || '';
+    closeIndustryCombo();
+    searchWithFallback().catch(alert);
+  });
+  document.addEventListener('click', (e) => {
+    if (!wrap.contains(e.target)) closeIndustryCombo();
+  });
+}
+
+async function searchWithFallback() {
+  const q = $('#filterQ').value.trim();
+  const f = readCompoundFilters();
+  const canRemote = !!q || hasCompoundFiltersClient(f);
+
+  const local = await loadLocalResult();
+  const rows = (local && local.rows) || [];
+  if (rows.length) return local;
+
+  // 本地无数据或无命中：有条件则自动远程
+  if (!canRemote) return local;
+  if (local && local.empty && !q && !f.industry && !hasCompoundFiltersClient({ ...f, industry: '' })) {
+    // empty cache and no remoteable filters besides nothing
+  }
+  setLoading(true, '本地无命中，正在远程搜索…');
+  try {
+    return await loadRemoteSearch();
+  } finally {
+    setLoading(false);
+  }
 }
 
 async function runRemoteFilterAndShow() {
   const f = readCompoundFilters();
   if (!hasCompoundFiltersClient(f)) {
-    throw new Error('请先选择盈利阶段/持股集中度/刚摘帽/异动');
+    throw new Error('请先选择行业/盈利阶段/持股集中度/刚摘帽/异动');
   }
   setLoading(true, '本地无命中，正在远程扫描主板…');
   setBadge('running', '远程过滤');
@@ -886,6 +1191,7 @@ async function runRemoteFilterAndShow() {
       focus: f.focus,
       uncapped: f.uncapped,
       abnormal: f.abnormal,
+      industry: f.industry,
     }),
   });
   await pollUntilDone();
@@ -894,6 +1200,7 @@ async function runRemoteFilterAndShow() {
   if (f.focus) params.set('focus', f.focus);
   if (f.uncapped) params.set('uncapped', f.uncapped);
   if (f.abnormal) params.set('abnormal', f.abnormal);
+  if (f.industry) params.set('industry', f.industry);
   const data = await api('/api/screen/remote-result?' + params.toString());
   renderMarket(data.market);
   if (data.empty || !(data.rows || []).length) {
@@ -921,6 +1228,7 @@ async function runRemoteFilterAndShow() {
 
 async function loadLocalResult() {
   const q = $('#filterQ').value.trim();
+  const industry = readIndustryFilter();
   const stage = $('#filterStage').value;
   const focus = $('#filterFocus').value;
   const uncapped = $('#filterUncapped').value;
@@ -928,6 +1236,7 @@ async function loadLocalResult() {
 
   const params = new URLSearchParams();
   if (q) params.set('q', q);
+  if (industry) params.set('industry', industry);
   if (stage) params.set('stage', stage);
   if (focus) params.set('focus', focus);
   if (uncapped) params.set('uncapped', uncapped);
@@ -966,20 +1275,22 @@ async function loadLocalResult() {
     ' · 异动 ' +
     abnN +
     (stages ? ' · ' + stages : '') +
-    (!(data.rows || []).length ? '（无命中，可点「远程搜索」）' : '');
+    (!(data.rows || []).length ? '（本地无命中）' : '');
   window.__lastResultRows = data.rows || [];
   renderRows(data.rows || []);
   setBadge('idle', '本地搜索');
+  if ((data.rows || []).length) loadIndustries(false).catch(() => {}); // refresh after result
   return data;
 }
 
 async function loadRemoteSearch() {
   const q = $('#filterQ').value.trim();
+  const industry = readIndustryFilter();
   const stage = $('#filterStage').value;
   const focus = $('#filterFocus').value;
   const uncapped = $('#filterUncapped').value;
   const abnormal = $('#filterAbnormal').value;
-  const compound = { stage, focus, uncapped, abnormal };
+  const compound = { stage, focus, uncapped, abnormal, industry };
 
   // 有名称/代码：远程个股查询
   if (q) {
@@ -996,12 +1307,28 @@ async function loadRemoteSearch() {
         (data.resolved && data.resolved.name && r && data.resolved.name !== r.name
           ? '（匹配 ' + data.resolved.name + '）'
           : '');
-      window.__lastResultRows = r ? [r] : [];
-      renderRows(r ? [r] : []);
-      if (data.live || data.lhb) {
+      let rows = r ? [r] : [];
+      if (industry && rows.length) {
+        const key = industry.toLowerCase();
+        rows = rows.filter((x) => String(x.industry || '').toLowerCase().includes(key));
+        if (!rows.length) {
+          $('#stats').textContent =
+            '远程搜索: ' +
+            (r ? r.code + ' ' + r.name : q) +
+            '（行业不匹配：' +
+            industry +
+            '）';
+        }
+      }
+      window.__lastResultRows = rows;
+      renderRows(rows);
+      if (rows.length && (data.live || data.lhb)) {
         if (data.liveConfig?.pollIntervalSec) state.liveIntervalSec = data.liveConfig.pollIntervalSec;
         renderLiveBox(data.live, data.lhb);
-        if (r?.code) startLivePoll(r.code);
+        if (rows[0]?.code) startLivePoll(rows[0].code);
+      } else if (!rows.length) {
+        if ($('#liveBox')) $('#liveBox').classList.add('hidden');
+        stopLivePoll();
       }
       setBadge('idle', '远程搜索');
       return data;
@@ -1016,7 +1343,7 @@ async function loadRemoteSearch() {
 
   // 无代码时：用复合条件远程扫主板
   if (!hasCompoundFiltersClient(compound)) {
-    alert('远程搜索请输入名称/代码，或选择盈利阶段/持股集中度/刚摘帽/异动');
+    alert('远程搜索请输入名称/代码，或选择行业/盈利阶段/持股集中度/刚摘帽/异动');
     return null;
   }
   return runRemoteFilterAndShow();
@@ -1080,7 +1407,9 @@ async function init() {
       if (btn.dataset.tab === 'favorites') loadFavorites().catch(alert);
     });
   });
-  $('#btnFilter').addEventListener('click', () => loadLocalResult().catch(alert));
+  bindIndustryCombo();
+  $('#btnFilter').addEventListener('click', () => searchWithFallback().catch(alert));
+  loadIndustries(false).catch(() => {});
   if ($('#btnRemoteSearch')) {
     $('#btnRemoteSearch').addEventListener('click', () => loadRemoteSearch().catch(alert));
   }

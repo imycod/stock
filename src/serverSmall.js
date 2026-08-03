@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const express = require('express');
 const config = require('../config');
-const { DEFAULTS, YI, runScreen, lookupStock, remoteFilter, hasCompoundFilters } = require('./exportSmall');
+const { DEFAULTS, YI, runScreen, lookupStock, remoteFilter, hasCompoundFilters, fetchMainBoardList } = require('./exportSmall');
 const smallDb = require('./storage/smallDatabase');
 const smallCollector = require('./smallCollector');
 const { stockFromParts } = require('./stocks');
@@ -379,10 +379,11 @@ app.post('/api/screen/remote-filter', async (req, res) => {
     focus: String(body.focus || '').trim(),
     uncapped: body.uncapped,
     abnormal: body.abnormal,
+    industry: String(body.industry || '').trim(),
     maxResults: body.maxResults,
   };
   if (!hasCompoundFilters(filters)) {
-    return res.status(400).json({ ok: false, error: '请至少选择盈利阶段/持股集中度/刚摘帽/异动之一' });
+    return res.status(400).json({ ok: false, error: '请至少选择行业/盈利阶段/持股集中度/刚摘帽/异动之一' });
   }
   const run = await startRemoteFilter(filters);
   if (!run.ok) {
@@ -403,10 +404,14 @@ app.get('/api/screen/remote-result', (req, res) => {
   const focus = String(req.query.focus || '').trim();
   const uncapped = String(req.query.uncapped || '').trim();
   const abnormal = String(req.query.abnormal || '').trim();
+  const industry = String(req.query.industry || '').trim().toLowerCase();
   if (stage) rows = rows.filter((r) => r.profitStage === stage);
   if (focus) rows = rows.filter((r) => r.holdFocus === focus);
   if (uncapped === '1' || uncapped === 'true') rows = rows.filter((r) => r.justUncapped);
   if (abnormal === '1' || abnormal === 'true') rows = rows.filter((r) => r.hasAbnormal);
+  if (industry) {
+    rows = rows.filter((r) => String(r.industry || '').toLowerCase().includes(industry));
+  }
   res.json({
     ok: true,
     empty: false,
@@ -466,6 +471,59 @@ app.get('/api/stock/lookup', async (req, res) => {
   }
 });
 
+
+let marketIndustryCache = { at: 0, list: [] };
+
+function collectIndustriesFromRows(rows, set) {
+  for (const r of rows || []) {
+    const ind = String(r.industry || '').trim();
+    if (ind) set.add(ind);
+  }
+}
+
+app.get('/api/screen/industries', async (req, res) => {
+  try {
+    const set = new Set();
+    collectIndustriesFromRows(lastResult && lastResult.rows, set);
+    collectIndustriesFromRows(lastFilterResult && lastFilterResult.rows, set);
+
+    const wantMarket =
+      req.query.market === '1' ||
+      req.query.market === 'true';
+
+    if (wantMarket) {
+      const fresh = Date.now() - marketIndustryCache.at < 60 * 60 * 1000;
+      if (fresh && marketIndustryCache.list.length) {
+        for (const x of marketIndustryCache.list) set.add(x);
+      } else {
+        const all = await fetchMainBoardList(false);
+        const list = [];
+        const mset = new Set();
+        for (const r of all) {
+          const ind = String(r.industry || '').trim();
+          if (ind && !mset.has(ind)) {
+            mset.add(ind);
+            list.push(ind);
+          }
+        }
+        list.sort((a, b) => a.localeCompare(b, 'zh-CN'));
+        marketIndustryCache = { at: Date.now(), list };
+        for (const x of list) set.add(x);
+      }
+    }
+
+    const industries = [...set].sort((a, b) => a.localeCompare(b, 'zh-CN'));
+    res.json({
+      ok: true,
+      industries,
+      source: wantMarket ? 'mixed' : 'cache',
+      count: industries.length,
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message || String(e) });
+  }
+});
+
 app.get('/api/screen/result', (req, res) => {
   if (!lastResult) {
     const compoundEmpty = {
@@ -473,6 +531,7 @@ app.get('/api/screen/result', (req, res) => {
       focus: String(req.query.focus || '').trim(),
       uncapped: String(req.query.uncapped || '').trim(),
       abnormal: String(req.query.abnormal || '').trim(),
+      industry: String(req.query.industry || '').trim(),
     };
     return res.json({
       ok: true,
@@ -486,6 +545,7 @@ app.get('/api/screen/result', (req, res) => {
     });
   }
   const q = String(req.query.q || '').trim().toLowerCase();
+  const industry = String(req.query.industry || '').trim().toLowerCase();
   const stage = String(req.query.stage || '').trim();
   const focus = String(req.query.focus || '').trim();
   const uncapped = String(req.query.uncapped || '').trim();
@@ -497,6 +557,9 @@ app.get('/api/screen/result', (req, res) => {
         String(r.code).includes(q) ||
         String(r.name).toLowerCase().includes(q)
     );
+  }
+  if (industry) {
+    rows = rows.filter((r) => String(r.industry || '').toLowerCase().includes(industry));
   }
   if (stage) rows = rows.filter((r) => r.profitStage === stage);
   if (focus) rows = rows.filter((r) => r.holdFocus === focus);
@@ -576,6 +639,88 @@ app.delete('/api/favorites/:code', (req, res) => {
     const code = String(req.params.code || '').trim();
     smallDb.removeFavorite(code);
     res.json({ ok: true, codes: smallDb.getFavoriteCodes() });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message || String(e) });
+  }
+});
+
+function todayShanghai() {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date());
+}
+
+function normalizePredictionOk(v) {
+  if (v === true || v === 1 || v === '1' || v === 'true') return 1;
+  if (v === false || v === 0 || v === '0' || v === 'false') return 0;
+  if (v == null || v === '' || v === 'unset') return null;
+  return null;
+}
+
+function normalizeDayMove(v) {
+  if (v == null || v === '') return null;
+  const s = String(v);
+  if (s === 'up' || s === 'down' || s === 'flat') return s;
+  return null;
+}
+
+app.get('/api/remarks', (req, res) => {
+  try {
+    const code = String(req.query.code || '').trim();
+    if (!/^\d{6}$/.test(code)) {
+      return res.status(400).json({ ok: false, error: '无效股票代码' });
+    }
+    const today = todayShanghai();
+    const rows = smallDb.getDailyRemarks(code);
+    res.json({ ok: true, today, rows });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message || String(e) });
+  }
+});
+
+app.post('/api/remarks', (req, res) => {
+  try {
+    const body = req.body || {};
+    const code = String(body.code || '').trim();
+    if (!/^\d{6}$/.test(code)) {
+      return res.status(400).json({ ok: false, error: '无效股票代码' });
+    }
+    const tradeDate = String(body.tradeDate || todayShanghai()).trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(tradeDate)) {
+      return res.status(400).json({ ok: false, error: '无效日期' });
+    }
+    const predictionOk = normalizePredictionOk(body.predictionOk);
+    const dayMove = normalizeDayMove(body.dayMove);
+    const content = body.content == null ? '' : String(body.content);
+    const isEmpty = !content.trim() && predictionOk == null && dayMove == null;
+    if (isEmpty) {
+      smallDb.deleteDailyRemark(code, tradeDate);
+      return res.json({ ok: true, row: null, rows: smallDb.getDailyRemarks(code) });
+    }
+    const row = smallDb.upsertDailyRemark({
+      code,
+      tradeDate,
+      content,
+      predictionOk,
+      dayMove,
+    });
+    const rows = smallDb.getDailyRemarks(code);
+    res.json({ ok: true, row, rows });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message || String(e) });
+  }
+});
+
+app.delete('/api/remarks/:code/:date', (req, res) => {
+  try {
+    const code = String(req.params.code || '').trim();
+    const tradeDate = String(req.params.date || '').trim();
+    if (!/^\d{6}$/.test(code)) {
+      return res.status(400).json({ ok: false, error: '无效股票代码' });
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(tradeDate)) {
+      return res.status(400).json({ ok: false, error: '无效日期' });
+    }
+    smallDb.deleteDailyRemark(code, tradeDate);
+    res.json({ ok: true, rows: smallDb.getDailyRemarks(code) });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message || String(e) });
   }
@@ -662,11 +807,13 @@ app.get('/api/live/watchlist', (_req, res) => {
   const list = smallDb.getWatchlist(true);
   const latest = smallDb.getLatestSnapshots(list.map((x) => x.code));
   const byCode = new Map(latest.map((x) => [x.code, x]));
+  const remarkCounts = smallDb.getDailyRemarkCounts(list.map((x) => x.code));
   res.json({
     ok: true,
     config: publicLiveConfig(),
     rows: list.map((w) => ({
       ...w,
+      remarkCount: remarkCounts[w.code] || 0,
       live: smallCollector.mapLiveRow(byCode.get(w.code), w.name),
     })),
   });

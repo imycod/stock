@@ -32,6 +32,13 @@
         <label>名称/代码
           <input id="filterQ" type="search" placeholder="在当前结果中按代码/名称过滤" />
         </label>
+        <label class="combo-field">行业
+          <div class="combo" id="industryCombo">
+            <input id="filterIndustry" type="search" autocomplete="off" placeholder="输入或选择行业" />
+            <button type="button" class="combo-caret" id="industryCaret" aria-label="展开行业列表">▾</button>
+            <ul id="industryOptions" class="combo-list hidden" role="listbox"></ul>
+          </div>
+        </label>
         <label>盈利阶段
           <select id="filterStage">
             <option value="">全部</option>
@@ -66,7 +73,7 @@
         </label>
         <button id="btnFilter" class="btn btn-secondary" type="button">搜索</button>
         <button id="btnRemoteSearch" class="btn" type="button">远程搜索</button>
-        <span class="muted" style="align-self:center">搜索=过滤当前数据；远程搜索=查主板/个股</span>
+        <span class="muted" style="align-self:center">搜索=先本地后远程；远程搜索=强制查主板/个股</span>
       </div>
       <div id="liveBox" class="live-box hidden">
         <div class="live-head">
@@ -130,7 +137,7 @@
                 <th></th><th>代码</th><th>名称</th><th>来源</th><th>最新价</th><th>涨跌%</th>
                 <th>成交量</th><th>成交额</th><th>换手%</th><th>量比</th>
                 <th>主力净流入</th><th>主动买</th><th>主动卖</th><th>主买</th><th>主卖</th>
-                <th>时间</th><th>分析</th>
+                <th>时间</th><th>分析</th><th>备注</th>
               </tr>
             </thead>
             <tbody></tbody>
@@ -212,6 +219,36 @@
       <div class="ai-input-row">
         <textarea id="aiInput" rows="2" placeholder="例如：分析主力意图 / 今天是出货还是洗盘？"></textarea>
         <button type="button" class="btn" id="btnAiSend">发送</button>
+      </div>
+    </div>
+  </div>
+
+
+  <div id="remarkModal" class="modal hidden">
+    <div class="modal-backdrop"></div>
+    <div class="modal-card remark-modal-card">
+      <div class="modal-head">
+        <div>
+          <strong id="remarkModalTitle">备注</strong>
+          <div id="remarkModalSub" class="muted">按日记录 AI 简要分析与预测结果</div>
+        </div>
+        <div class="remark-head-actions">
+          <button type="button" class="btn btn-sm" id="btnRemarkSave">保存</button>
+          <button type="button" class="btn btn-secondary btn-sm" id="btnRemarkClose">关闭</button>
+        </div>
+      </div>
+      <div class="remark-table-wrap">
+        <table id="remarkTable" class="remark-table">
+          <thead>
+            <tr>
+              <th>日期</th>
+              <th>备注</th>
+              <th>预测是否正确</th>
+              <th>当日涨跌</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
       </div>
     </div>
   </div>

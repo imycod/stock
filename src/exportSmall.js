@@ -1495,10 +1495,12 @@ async function main() {
 function matchesCompoundFilters(row, filters = {}) {
   const stage = String(filters.stage || '').trim();
   const focus = String(filters.focus || '').trim();
+  const industry = String(filters.industry || '').trim().toLowerCase();
   const uncapped = filters.uncapped === true || filters.uncapped === 1 || filters.uncapped === '1' || filters.uncapped === 'true';
   const abnormal = filters.abnormal === true || filters.abnormal === 1 || filters.abnormal === '1' || filters.abnormal === 'true';
   if (stage && (row.profitStage || '') !== stage) return false;
   if (focus && (row.holdFocus || '') !== focus) return false;
+  if (industry && !String(row.industry || '').toLowerCase().includes(industry)) return false;
   if (uncapped && !row.justUncapped) return false;
   if (abnormal && !row.hasAbnormal) return false;
   return true;
@@ -1507,13 +1509,14 @@ function matchesCompoundFilters(row, filters = {}) {
 function hasCompoundFilters(filters = {}) {
   const stage = String(filters.stage || '').trim();
   const focus = String(filters.focus || '').trim();
+  const industry = String(filters.industry || '').trim();
   const uncapped = filters.uncapped === true || filters.uncapped === 1 || filters.uncapped === '1' || filters.uncapped === 'true';
   const abnormal = filters.abnormal === true || filters.abnormal === 1 || filters.abnormal === '1' || filters.abnormal === 'true';
-  return !!(stage || focus || uncapped || abnormal);
+  return !!(stage || focus || industry || uncapped || abnormal);
 }
 
 /**
- * 在主板全市场按复合条件远程过滤（盈利阶段/持股集中度/刚摘帽/异动）
+ * 在主板全市场按复合条件远程过滤（行业/盈利阶段/持股集中度/刚摘帽/异动）
  * 仅拉取条件所需接口，命中后再做完整基本面补全。
  */
 async function remoteFilter(userFilters = {}, onProgress = () => {}) {
@@ -1522,6 +1525,7 @@ async function remoteFilter(userFilters = {}, onProgress = () => {}) {
   const filters = {
     stage: String(userFilters.stage || '').trim(),
     focus: String(userFilters.focus || '').trim(),
+    industry: String(userFilters.industry || '').trim(),
     uncapped:
       userFilters.uncapped === true ||
       userFilters.uncapped === 1 ||
@@ -1534,7 +1538,7 @@ async function remoteFilter(userFilters = {}, onProgress = () => {}) {
       userFilters.abnormal === 'true',
   };
   if (!hasCompoundFilters(filters)) {
-    throw new Error('请至少选择一个复合条件：盈利阶段 / 持股集中度 / 刚摘帽 / 异动');
+    throw new Error('请至少选择一个条件：行业 / 盈利阶段 / 持股集中度 / 刚摘帽 / 异动');
   }
 
   const maxResults = Math.max(1, Number(userFilters.maxResults || opts.remoteMaxResults || 80));
@@ -1553,6 +1557,19 @@ async function remoteFilter(userFilters = {}, onProgress = () => {}) {
   progress('clist', { message: `主板 ${all.length} 只`, done: all.length, total: all.length, matched: all.length });
 
   let candidates = all.map((r) => ({ ...r }));
+
+  // 0) 行业：clist 已有 f100，本地预过滤，缩小后续扫描范围
+  if (filters.industry) {
+    const key = filters.industry.toLowerCase();
+    const before = candidates.length;
+    candidates = candidates.filter((r) => String(r.industry || '').toLowerCase().includes(key));
+    progress('clist', {
+      message: `按行业预过滤「${filters.industry}」: ${before} → ${candidates.length}`,
+      done: candidates.length,
+      total: before,
+      matched: candidates.length,
+    });
+  }
 
   // 1) 持股集中度：先拉股东户数，大幅缩小范围
   if (filters.focus) {
@@ -1736,6 +1753,7 @@ module.exports = {
   writeExcel,
   isStName,
   classifyProfitStage,
+  fetchMainBoardList,
 };
 
 if (require.main === module) {

@@ -97,8 +97,21 @@ function initSchema() {
       updated_at TEXT DEFAULT (datetime('now','localtime'))
     );
 
+    CREATE TABLE IF NOT EXISTS daily_remarks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      code TEXT NOT NULL,
+      trade_date TEXT NOT NULL,
+      content TEXT,
+      prediction_ok INTEGER,
+      day_move TEXT,
+      created_at TEXT DEFAULT (datetime('now','localtime')),
+      updated_at TEXT DEFAULT (datetime('now','localtime')),
+      UNIQUE(code, trade_date)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_small_minute_date ON minute_snapshots(trade_date, code);
     CREATE INDEX IF NOT EXISTS idx_small_minute_code ON minute_snapshots(code, id DESC);
+    CREATE INDEX IF NOT EXISTS idx_daily_remarks_code ON daily_remarks(code, trade_date DESC);
   `);
 }
 
@@ -443,6 +456,83 @@ function isFavorite(code) {
   return !!getDb().prepare('SELECT 1 AS x FROM favorites WHERE code = ?').get(code);
 }
 
+function mapDailyRemark(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    code: row.code,
+    tradeDate: row.trade_date,
+    content: row.content || '',
+    predictionOk: row.prediction_ok == null ? null : row.prediction_ok,
+    dayMove: row.day_move == null ? null : row.day_move,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function getDailyRemarks(code) {
+  const rows = getDb()
+    .prepare(
+      'SELECT id, code, trade_date, content, prediction_ok, day_move, created_at, updated_at FROM daily_remarks WHERE code = ? ORDER BY trade_date DESC'
+    )
+    .all(code);
+  return rows.map(mapDailyRemark);
+}
+
+function upsertDailyRemark(row) {
+  const stmt = getDb().prepare(`
+    INSERT INTO daily_remarks (code, trade_date, content, prediction_ok, day_move, created_at, updated_at)
+    VALUES (@code, @tradeDate, @content, @predictionOk, @dayMove, datetime('now','localtime'), datetime('now','localtime'))
+    ON CONFLICT(code, trade_date) DO UPDATE SET
+      content=excluded.content,
+      prediction_ok=excluded.prediction_ok,
+      day_move=excluded.day_move,
+      updated_at=datetime('now','localtime')
+  `);
+  stmt.run({
+    code: row.code,
+    tradeDate: row.tradeDate,
+    content: row.content == null ? '' : String(row.content),
+    predictionOk: row.predictionOk == null ? null : row.predictionOk,
+    dayMove: row.dayMove == null || row.dayMove === '' ? null : row.dayMove,
+  });
+  const saved = getDb()
+    .prepare(
+      'SELECT id, code, trade_date, content, prediction_ok, day_move, created_at, updated_at FROM daily_remarks WHERE code = ? AND trade_date = ?'
+    )
+    .get(row.code, row.tradeDate);
+  return mapDailyRemark(saved);
+}
+
+function deleteDailyRemark(code, tradeDate) {
+  return getDb()
+    .prepare('DELETE FROM daily_remarks WHERE code = ? AND trade_date = ?')
+    .run(code, tradeDate);
+}
+
+function countDailyRemarks(code) {
+  const row = getDb()
+    .prepare('SELECT COUNT(*) AS c FROM daily_remarks WHERE code = ?')
+    .get(code);
+  return row ? row.c : 0;
+}
+
+function getDailyRemarkCounts(codes) {
+  const map = {};
+  if (!codes || !codes.length) {
+    const all = getDb()
+      .prepare('SELECT code, COUNT(*) AS c FROM daily_remarks GROUP BY code')
+      .all();
+    for (const r of all) map[r.code] = r.c;
+    return map;
+  }
+  const stmt = getDb().prepare('SELECT COUNT(*) AS c FROM daily_remarks WHERE code = ?');
+  for (const code of codes) {
+    map[code] = stmt.get(code).c;
+  }
+  return map;
+}
+
 module.exports = {
   getDb,
   dbPath,
@@ -468,4 +558,9 @@ module.exports = {
   getFavorites,
   getFavoriteCodes,
   isFavorite,
+  getDailyRemarks,
+  upsertDailyRemark,
+  deleteDailyRemark,
+  countDailyRemarks,
+  getDailyRemarkCounts,
 };
