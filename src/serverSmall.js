@@ -815,6 +815,292 @@ app.post('/api/ai/chat', async (req, res) => {
   }
 });
 
+
+const PLAN_SYSTEM = [
+  '你是一名 A 股分时与主力资金研究助手。',
+  '根据提供的分钟快照与资金流数据，判断主力是吸筹、出货还是不明确。',
+  '必须给出明确建议：买入 / 卖出 / 观望 三者之一。',
+  '规则：主力吸筹→买入；主力出货→卖出；无明显方向或矛盾→观望。',
+  '输出格式严格如下（不要省略标记行）：',
+  '信号: 买入|卖出|观望',
+  '理由: （2-5句中文，引用关键价量与资金现象）',
+  '仅供研究参考，不构成投资建议。',
+].join('');
+
+function shanghaiNowLocal() {
+  return new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Shanghai' });
+}
+
+function parsePlanSignal(answer) {
+  const text = String(answer || '');
+  let signal = 'hold';
+  const m = text.match(/信号\s*[:：]\s*(买入|卖出|观望)/);
+  if (m) {
+    signal = m[1] === '买入' ? 'buy' : m[1] === '卖出' ? 'sell' : 'hold';
+  } else if (/建议买入|可以买入|吸筹/.test(text) && !/出货|建议卖出/.test(text)) {
+    signal = 'buy';
+  } else if (/建议卖出|可以卖出|出货/.test(text) && !/吸筹|建议买入/.test(text)) {
+    signal = 'sell';
+  }
+  return signal;
+}
+
+function normalizePlanDateTime(v) {
+  if (v == null || v === '') return null;
+  let s = String(v).trim().replace('T', ' ');
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(s)) return s;
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(s)) return s.slice(0, 16);
+  return s;
+}
+
+function parseOptionalPrice(v) {
+  if (v == null || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+async function analyzeTradePlanById(id, days) {
+  const plan = smallDb.getTradePlan(id);
+  if (!plan) {
+    const err = new Error('计划不存在');
+    err.status = 404;
+    throw err;
+  }
+  const code = String(plan.code || '').trim();
+  if (!/^\d{6}$/.test(code)) {
+    const err = new Error('计划股票代码无效');
+    err.status = 400;
+    throw err;
+  }
+  try {
+    smallCollector.ensureWatch(stockFromParts(code, plan.name || ''), 'plan');
+  } catch {
+    /* ignore */
+  }
+
+  let ctx = buildSnapshotContext(code, days || 5);
+  if (!ctx.meta.rowCount) {
+    try {
+      const w = smallDb.getWatchlistStock(code) || stockFromParts(code, plan.name || '');
+      await smallCollector.collectOnce(w, { force: true, withDepth: true, withLhb: true });
+      ctx = buildSnapshotContext(code, days || 5);
+    } catch (e) {
+      console.warn('[trade-plan] collectOnce failed:', e.message || e);
+    }
+  }
+  if (!ctx.meta.rowCount) {
+    const err = new Error('该股票暂无分钟快照，请先纳入实时监控并等待采集');
+    err.status = 400;
+    err.meta = ctx.meta;
+    throw err;
+  }
+
+  const question = [
+    '请根据分钟快照与资金流，判断主力是吸筹、出货还是不明确，并给出买入/卖出/观望建议。',
+    `计划标的：${plan.code} ${plan.name || ''}`,
+    `浮动买入价格：${plan.buyPrice == null ? '未设' : plan.buyPrice}`,
+    `买入时间：${plan.buyTime || '未设'}`,
+    `浮动卖出价格：${plan.sellPrice == null ? '未设' : plan.sellPrice}`,
+    `卖出时间：${plan.sellTime || '未设'}`,
+    plan.note ? `备注：${plan.note}` : '',
+    '请严格按指定格式输出。',
+  ]
+    .filter(Boolean)
+    .join('\n');
+
+  const messages = [
+    { role: 'system', content: PLAN_SYSTEM },
+    {
+      role: 'user',
+      content:
+        '以下是供分析的分钟快照数据（CSV）。请基于这份数据完成计划买卖分析。\n\n' +
+        ctx.text,
+    },
+    { role: 'user', content: question },
+  ];
+
+  const result = await chatCompletions({ messages });
+  const answer = result.content || '';
+  const signal = parsePlanSignal(answer);
+  const reasonMatch = String(answer).match(/理由\s*[:：]\s*([\s\S]*?)(?:\n仅供研究参考|$)/);
+  const aiReason = (reasonMatch ? reasonMatch[1] : answer).trim().slice(0, 2000);
+  const aiAnalyzedAt = shanghaiNowLocal();
+  const updated = smallDb.updateTradePlanAi(id, {
+    aiSignal: signal,
+    aiReason,
+    aiAnalyzedAt,
+  });
+  return {
+    ok: true,
+    plan: updated,
+    answer,
+    signal,
+    reasoning: result.reasoning || '',
+    model: result.model,
+    usage: result.usage,
+    meta: ctx.meta,
+  };
+}
+
+app.get('/api/trade-plans', (req, res) => {
+  try {
+    const q = String(req.query.q || '').trim();
+    const rows = smallDb.getTradePlans(q);
+    res.json({ ok: true, rows, total: rows.length });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message || String(e) });
+  }
+});
+
+app.post('/api/trade-plans', async (req, res) => {
+  try {
+    const body = req.body || {};
+    let code = String(body.code || '').trim();
+    let name = body.name == null ? '' : String(body.name);
+    const q = String(body.q || '').trim();
+    if (!/^\d{6}$/.test(code)) {
+      if (!q && !code) {
+        return res.status(400).json({ ok: false, error: '请填写股票名称或代码' });
+      }
+      const looked = await lookupStock(q || code);
+      code = String(looked?.resolved?.code || looked?.row?.code || looked?.row?.f12 || '').trim();
+      if (!name) {
+        name = String(looked?.resolved?.name || looked?.row?.name || looked?.row?.f14 || '');
+      }
+    }
+    if (!/^\d{6}$/.test(code)) {
+      return res.status(400).json({ ok: false, error: '无法解析股票代码' });
+    }
+    const buyPrice = parseOptionalPrice(body.buyPrice);
+    const sellPrice = parseOptionalPrice(body.sellPrice);
+    if (buyPrice == null && sellPrice == null) {
+      return res.status(400).json({ ok: false, error: '请至少填写买入价或卖出价' });
+    }
+    try {
+      smallCollector.ensureWatch(stockFromParts(code, name), 'plan');
+    } catch {
+      /* ignore */
+    }
+    const plan = smallDb.createTradePlan({
+      code,
+      name,
+      buyPrice,
+      buyTime: normalizePlanDateTime(body.buyTime),
+      sellPrice,
+      sellTime: normalizePlanDateTime(body.sellTime),
+      note: body.note,
+    });
+    res.json({ ok: true, plan });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message || String(e) });
+  }
+});
+
+app.put('/api/trade-plans/:id', async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(400).json({ ok: false, error: '无效计划 id' });
+    }
+    const cur = smallDb.getTradePlan(id);
+    if (!cur) return res.status(404).json({ ok: false, error: '计划不存在' });
+    const body = req.body || {};
+    let code = body.code != null ? String(body.code).trim() : cur.code;
+    let name = body.name != null ? String(body.name) : cur.name;
+    const q = String(body.q || '').trim();
+    if (q && !/^\d{6}$/.test(code)) {
+      const looked = await lookupStock(q);
+      code = String(looked?.resolved?.code || looked?.row?.code || looked?.row?.f12 || '').trim();
+      if (body.name == null) {
+        name = String(looked?.resolved?.name || looked?.row?.name || looked?.row?.f14 || name || '');
+      }
+    }
+    if (!/^\d{6}$/.test(code)) {
+      return res.status(400).json({ ok: false, error: '无效股票代码' });
+    }
+    const fields = { code, name };
+    if (Object.prototype.hasOwnProperty.call(body, 'buyPrice')) fields.buyPrice = parseOptionalPrice(body.buyPrice);
+    if (Object.prototype.hasOwnProperty.call(body, 'buyTime')) fields.buyTime = normalizePlanDateTime(body.buyTime);
+    if (Object.prototype.hasOwnProperty.call(body, 'sellPrice')) fields.sellPrice = parseOptionalPrice(body.sellPrice);
+    if (Object.prototype.hasOwnProperty.call(body, 'sellTime')) fields.sellTime = normalizePlanDateTime(body.sellTime);
+    if (Object.prototype.hasOwnProperty.call(body, 'note')) fields.note = body.note;
+    const mergedBuy = Object.prototype.hasOwnProperty.call(fields, 'buyPrice') ? fields.buyPrice : cur.buyPrice;
+    const mergedSell = Object.prototype.hasOwnProperty.call(fields, 'sellPrice') ? fields.sellPrice : cur.sellPrice;
+    if (mergedBuy == null && mergedSell == null) {
+      return res.status(400).json({ ok: false, error: '请至少填写买入价或卖出价' });
+    }
+    try {
+      smallCollector.ensureWatch(stockFromParts(code, name), 'plan');
+    } catch {
+      /* ignore */
+    }
+    const plan = smallDb.updateTradePlan(id, fields);
+    res.json({ ok: true, plan });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message || String(e) });
+  }
+});
+
+app.delete('/api/trade-plans/:id', (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(400).json({ ok: false, error: '无效计划 id' });
+    }
+    smallDb.deleteTradePlan(id);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message || String(e) });
+  }
+});
+
+app.post('/api/trade-plans/:id/analyze', async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(400).json({ ok: false, error: '无效计划 id' });
+    }
+    const days = req.body?.days;
+    const out = await analyzeTradePlanById(id, days);
+    res.json(out);
+  } catch (e) {
+    const status = e.code === 'AI_NOT_CONFIGURED' ? 503 : e.status || 500;
+    res.status(status).json({ ok: false, error: e.message || String(e), meta: e.meta });
+  }
+});
+
+app.post('/api/trade-plans/analyze-all', async (req, res) => {
+  try {
+    const days = req.body?.days;
+    const plans = smallDb.getTradePlans();
+    const results = [];
+    for (const plan of plans) {
+      try {
+        const out = await analyzeTradePlanById(plan.id, days);
+        results.push({ ok: true, id: plan.id, code: plan.code, signal: out.signal });
+      } catch (e) {
+        results.push({
+          ok: false,
+          id: plan.id,
+          code: plan.code,
+          error: e.message || String(e),
+        });
+      }
+    }
+    const okCount = results.filter((r) => r.ok).length;
+    res.json({
+      ok: true,
+      total: results.length,
+      okCount,
+      failCount: results.length - okCount,
+      results,
+    });
+  } catch (e) {
+    const status = e.code === 'AI_NOT_CONFIGURED' ? 503 : 500;
+    res.status(status).json({ ok: false, error: e.message || String(e) });
+  }
+});
+
 app.get('/api/live/status', (_req, res) => {
   res.json({ ok: true, poll: smallCollector.getPollStatus(), config: publicLiveConfig() });
 });

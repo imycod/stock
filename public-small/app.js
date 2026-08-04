@@ -1,6 +1,6 @@
 const $ = (s) => document.querySelector(s);
 
-const state = { polling: null, liveCode: null, liveTimer: null, liveListTimer: null, liveIntervalSec: 60, liveRows: [], liveExpand: {}, favoriteCodes: new Set(), favRows: [], aiConfig: null, aiSession: null, aiBound: false, remarkSession: null, remarkBound: false, industries: [], industryComboBound: false, industryMarketLoaded: false, aiBusy: false };
+const state = { polling: null, liveCode: null, liveTimer: null, liveListTimer: null, liveIntervalSec: 60, liveRows: [], liveExpand: {}, favoriteCodes: new Set(), favRows: [], planRows: [], planBound: false, planResolved: null, planAnalyzing: false, aiConfig: null, aiSession: null, aiBound: false, remarkSession: null, remarkBound: false, industries: [], industryComboBound: false, industryMarketLoaded: false, aiBusy: false };
 
 function showTab(name) {
   document.querySelectorAll('.tab').forEach((el) => {
@@ -1460,12 +1460,365 @@ async function runScreenAndShow() {
   await loadResult();
 }
 
+
+function planSignalLabel(signal) {
+  if (signal === 'buy') return '买入';
+  if (signal === 'sell') return '卖出';
+  if (signal === 'hold') return '观望';
+  return '未分析';
+}
+
+function planSignalClass(signal) {
+  if (signal === 'buy' || signal === 'sell' || signal === 'hold') return signal;
+  return 'none';
+}
+
+function toDatetimeLocalValue(v) {
+  if (!v) return '';
+  let s = String(v).trim().replace(' ', 'T');
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(s)) return s.slice(0, 16);
+  return '';
+}
+
+function fromDatetimeLocalValue(v) {
+  if (!v) return '';
+  return String(v).trim().replace('T', ' ').slice(0, 16);
+}
+
+function setPlanStatus(text) {
+  const el = $('#planStatus');
+  if (el) el.textContent = text || '';
+}
+
+function renderPlanTable(rows) {
+  const tbody = $('#planTable tbody');
+  if (!tbody) return;
+  const list = rows || [];
+  if (!list.length) {
+    tbody.innerHTML = '<tr><td colspan="10" class="muted">暂无计划，点击「创建」添加</td></tr>';
+    return;
+  }
+  tbody.innerHTML = list
+    .map(function (r) {
+      const sig = planSignalClass(r.aiSignal);
+      const sigLabel = planSignalLabel(r.aiSignal);
+      const reason = r.aiReason || '';
+      return (
+        '<tr data-id="' +
+        r.id +
+        '">' +
+        '<td><span class="signal-cell"><span class="signal-dot ' +
+        sig +
+        '"></span>' +
+        escapeHtml(sigLabel) +
+        '</span></td>' +
+        '<td>' +
+        escapeHtml(r.code || '') +
+        '</td>' +
+        '<td>' +
+        escapeHtml(r.name || '') +
+        '</td>' +
+        '<td>' +
+        escapeHtml(r.buyPrice == null ? '' : fmt(r.buyPrice, 2)) +
+        '</td>' +
+        '<td>' +
+        escapeHtml(r.buyTime || '') +
+        '</td>' +
+        '<td>' +
+        escapeHtml(r.sellPrice == null ? '' : fmt(r.sellPrice, 2)) +
+        '</td>' +
+        '<td>' +
+        escapeHtml(r.sellTime || '') +
+        '</td>' +
+        '<td><div class="plan-reason" title="' +
+        escapeHtml(reason) +
+        '">' +
+        escapeHtml(reason) +
+        '</div></td>' +
+        '<td>' +
+        escapeHtml(r.aiAnalyzedAt || '') +
+        '</td>' +
+        '<td class="plan-actions">' +
+        '<button type="button" class="btn btn-secondary btn-sm btn-plan-analyze" data-id="' +
+        r.id +
+        '">分析</button>' +
+        '<button type="button" class="btn btn-secondary btn-sm btn-plan-edit" data-id="' +
+        r.id +
+        '">编辑</button>' +
+        '<button type="button" class="btn btn-secondary btn-sm btn-plan-del" data-id="' +
+        r.id +
+        '">删除</button>' +
+        '</td>' +
+        '</tr>'
+      );
+    })
+    .join('');
+
+  tbody.querySelectorAll('.btn-plan-analyze').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      analyzePlan(Number(btn.dataset.id)).catch(function (e) {
+        alert(e.message);
+      });
+    });
+  });
+  tbody.querySelectorAll('.btn-plan-edit').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      const id = Number(btn.dataset.id);
+      const row = (state.planRows || []).find(function (x) {
+        return x.id === id;
+      });
+      if (row) openPlanModal(row);
+    });
+  });
+  tbody.querySelectorAll('.btn-plan-del').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      deletePlan(Number(btn.dataset.id)).catch(function (e) {
+        alert(e.message);
+      });
+    });
+  });
+}
+
+function applyPlanFilter() {
+  const q = ($('#planFilterQ') && $('#planFilterQ').value ? $('#planFilterQ').value : '').trim().toLowerCase();
+  const rows = state.planRows || [];
+  const filtered = !q
+    ? rows
+    : rows.filter(function (r) {
+        return (
+          String(r.code || '')
+            .toLowerCase()
+            .includes(q) ||
+          String(r.name || '')
+            .toLowerCase()
+            .includes(q)
+        );
+      });
+  renderPlanTable(filtered);
+  setPlanStatus('共 ' + rows.length + ' 条计划' + (q ? '，筛选后 ' + filtered.length + ' 条' : ''));
+}
+
+async function loadTradePlans() {
+  const data = await api('/api/trade-plans');
+  state.planRows = data.rows || [];
+  applyPlanFilter();
+}
+
+function bindPlanModalOnce() {
+  if (state.planBound) return;
+  // Modals are after <script> historically; do not mark bound until Save exists
+  if (!$('#btnPlanSave') || !$('#planForm')) {
+    console.warn('[plan] bindPlanModalOnce: DOM not ready, will retry on open');
+    return;
+  }
+  state.planBound = true;
+  if ($('#btnPlanClose')) $('#btnPlanClose').addEventListener('click', closePlanModal);
+  const bd = $('#planModal') && $('#planModal').querySelector('.modal-backdrop');
+  if (bd) bd.addEventListener('click', closePlanModal);
+  $('#btnPlanSave').addEventListener('click', function (e) {
+    e.preventDefault();
+    console.log('[plan] save clicked');
+    savePlan().catch(function (err) {
+      console.error('[plan] save failed', err);
+      alert(err.message || String(err));
+    });
+  });
+  if ($('#planStockQ')) {
+    $('#planStockQ').addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        lookupPlanStock().catch(function (err) {
+          alert(err.message || String(err));
+        });
+      }
+    });
+  }
+  $('#planForm').addEventListener('submit', function (e) {
+    e.preventDefault();
+    console.log('[plan] form submit');
+    savePlan().catch(function (err) {
+      console.error('[plan] save failed', err);
+      alert(err.message || String(err));
+    });
+  });
+}
+
+function openPlanModal(editRow) {
+  bindPlanModalOnce();
+  const modal = $('#planModal');
+  if (!modal) return;
+  $('#planModalTitle').textContent = editRow ? '编辑计划' : '创建计划';
+  $('#planEditId').value = editRow ? String(editRow.id) : '';
+  if (editRow) {
+    state.planResolved = { code: editRow.code, name: editRow.name || '' };
+    $('#planStockQ').value = (editRow.code || '') + (editRow.name ? ' ' + editRow.name : '');
+    $('#planStockQ').disabled = true;
+    $('#planStockHint').textContent = '代码 ' + editRow.code + (editRow.name ? ' · ' + editRow.name : '');
+    $('#planBuyPrice').value = editRow.buyPrice == null ? '' : editRow.buyPrice;
+    $('#planBuyTime').value = toDatetimeLocalValue(editRow.buyTime);
+    $('#planSellPrice').value = editRow.sellPrice == null ? '' : editRow.sellPrice;
+    $('#planSellTime').value = toDatetimeLocalValue(editRow.sellTime);
+    $('#planNote').value = editRow.note || '';
+  } else {
+    state.planResolved = null;
+    $('#planStockQ').value = '';
+    $('#planStockQ').disabled = false;
+    $('#planStockHint').textContent = '将自动解析为 6 位代码';
+    $('#planBuyPrice').value = '';
+    $('#planBuyTime').value = '';
+    $('#planSellPrice').value = '';
+    $('#planSellTime').value = '';
+    $('#planNote').value = '';
+  }
+  modal.classList.remove('hidden');
+}
+
+function closePlanModal() {
+  const modal = $('#planModal');
+  if (modal) modal.classList.add('hidden');
+  state.planResolved = null;
+  if ($('#planStockQ')) $('#planStockQ').disabled = false;
+}
+
+async function lookupPlanStock() {
+  const q = ($('#planStockQ').value || '').trim();
+  if (!q) throw new Error('请输入股票名称或代码');
+  const data = await api('/api/stock/lookup?q=' + encodeURIComponent(q));
+  const code = (data.resolved && data.resolved.code) || (data.row && data.row.code) || '';
+  const name = (data.resolved && data.resolved.name) || (data.row && data.row.name) || '';
+  if (!/^\d{6}$/.test(String(code))) throw new Error('未能解析股票代码');
+  state.planResolved = { code: String(code), name: name || '' };
+  $('#planStockQ').value = code + (name ? ' ' + name : '');
+  $('#planStockHint').textContent = '已解析：' + code + (name ? ' · ' + name : '');
+  return state.planResolved;
+}
+
+async function savePlan() {
+  const editId = ($('#planEditId').value || '').trim();
+  let resolved = state.planResolved;
+  const q = ($('#planStockQ').value || '').trim();
+  if (!editId) {
+    if (!q) {
+      alert('请输入股票名称或代码');
+      throw new Error('请输入股票名称或代码');
+    }
+    if (!resolved || !/^\d{6}$/.test(resolved.code)) {
+      resolved = await lookupPlanStock();
+    }
+  }
+  const buyPrice = ($('#planBuyPrice').value || '').trim();
+  const sellPrice = ($('#planSellPrice').value || '').trim();
+  if (!buyPrice && !sellPrice) {
+    alert('请至少填写买入价或卖出价');
+    throw new Error('请至少填写买入价或卖出价');
+  }
+  const code = editId
+    ? ((resolved && resolved.code) || ((q.match(/\d{6}/) || [])[0] || ''))
+    : (resolved && resolved.code) || '';
+  if (!/^\d{6}$/.test(String(code))) {
+    alert('未能解析股票代码，请先输入代码/名称并回车检索');
+    throw new Error('未能解析股票代码');
+  }
+  const body = {
+    code: String(code),
+    name: editId ? (resolved && resolved.name) || '' : (resolved && resolved.name) || '',
+    q: q,
+    buyPrice: buyPrice === '' ? null : Number(buyPrice),
+    buyTime: fromDatetimeLocalValue($('#planBuyTime').value),
+    sellPrice: sellPrice === '' ? null : Number(sellPrice),
+    sellTime: fromDatetimeLocalValue($('#planSellTime').value),
+    note: ($('#planNote').value || '').trim(),
+  };
+  if (buyPrice !== '' && !Number.isFinite(body.buyPrice)) {
+    alert('买入价格式无效');
+    throw new Error('买入价格式无效');
+  }
+  if (sellPrice !== '' && !Number.isFinite(body.sellPrice)) {
+    alert('卖出价格式无效');
+    throw new Error('卖出价格式无效');
+  }
+  console.log('[plan] calling API', editId ? 'PUT' : 'POST', body);
+  if (editId) {
+    await api('/api/trade-plans/' + encodeURIComponent(editId), {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    });
+  } else {
+    await api('/api/trade-plans', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+  }
+  closePlanModal();
+  await loadTradePlans();
+  setPlanStatus(editId ? '计划已更新' : '计划已创建');
+}
+
+async function deletePlan(id) {
+  if (!confirm('确认删除该计划？')) return;
+  await api('/api/trade-plans/' + encodeURIComponent(id), { method: 'DELETE' });
+  await loadTradePlans();
+  setPlanStatus('已删除计划 #' + id);
+}
+
+async function analyzePlan(id) {
+  if (state.planAnalyzing) return;
+  state.planAnalyzing = true;
+  setPlanStatus('正在分析计划 #' + id + '…');
+  try {
+    const data = await api('/api/trade-plans/' + encodeURIComponent(id) + '/analyze', {
+      method: 'POST',
+      body: JSON.stringify({ days: 5 }),
+    });
+    await loadTradePlans();
+    const label = planSignalLabel(data.signal);
+    setPlanStatus('分析完成：' + label + (data.plan && data.plan.code ? ' · ' + data.plan.code : ''));
+  } finally {
+    state.planAnalyzing = false;
+  }
+}
+
+async function analyzeAllPlans() {
+  if (state.planAnalyzing) return;
+  if (!(state.planRows || []).length) {
+    await loadTradePlans();
+  }
+  if (!(state.planRows || []).length) {
+    alert('暂无计划可分析');
+    return;
+  }
+  if (!confirm('确认对全部 ' + state.planRows.length + ' 条计划依次分析？可能耗时较长。')) return;
+  state.planAnalyzing = true;
+  const btn = $('#btnPlanAnalyzeAll');
+  if (btn) btn.disabled = true;
+  setPlanStatus('正在全部分析…');
+  try {
+    const data = await api('/api/trade-plans/analyze-all', {
+      method: 'POST',
+      body: JSON.stringify({ days: 5 }),
+    });
+    await loadTradePlans();
+    setPlanStatus(
+      '全部分析完成：成功 ' +
+        (data.okCount || 0) +
+        ' / ' +
+        (data.total || 0) +
+        '，失败 ' +
+        (data.failCount || 0)
+    );
+  } finally {
+    state.planAnalyzing = false;
+    if (btn) btn.disabled = false;
+  }
+}
+
 async function init() {
   document.querySelectorAll('.tab').forEach((btn) => {
     btn.addEventListener('click', () => {
       showTab(btn.dataset.tab);
       if (btn.dataset.tab === 'live') loadLiveWatchlist().catch(alert);
       if (btn.dataset.tab === 'favorites') loadFavorites().catch(alert);
+      if (btn.dataset.tab === 'plans') loadTradePlans().catch(alert);
     });
   });
   bindIndustryCombo();
@@ -1511,6 +1864,33 @@ async function init() {
   if ($('#btnFavRefresh')) {
     $('#btnFavRefresh').addEventListener('click', () => loadFavorites().catch(alert));
   }
+  if ($('#btnPlanFilter')) {
+    $('#btnPlanFilter').addEventListener('click', () => {
+      if (!(state.planRows || []).length) loadTradePlans().catch(alert);
+      else applyPlanFilter();
+    });
+  }
+  if ($('#planFilterQ')) {
+    $('#planFilterQ').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        if (!(state.planRows || []).length) loadTradePlans().catch(alert);
+        else applyPlanFilter();
+      }
+    });
+    $('#planFilterQ').addEventListener('input', () => {
+      if ((state.planRows || []).length) applyPlanFilter();
+    });
+  }
+  if ($('#btnPlanCreate')) {
+    $('#btnPlanCreate').addEventListener('click', () => openPlanModal(null));
+  }
+  if ($('#btnPlanRefresh')) {
+    $('#btnPlanRefresh').addEventListener('click', () => loadTradePlans().catch(alert));
+  }
+  if ($('#btnPlanAnalyzeAll')) {
+    $('#btnPlanAnalyzeAll').addEventListener('click', () => analyzeAllPlans().catch(alert));
+  }
+  bindPlanModalOnce();
   if ($('#liveFilterQ')) {
     $('#liveFilterQ').addEventListener('keydown', (e) => {
       if (e.key === 'Enter') applyLiveFilter();

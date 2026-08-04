@@ -481,3 +481,19 @@ td.clip {
 .fav-row.drag-over { outline: 2px dashed var(--accent); outline-offset: -2px; background: rgba(180,120,60,.06); }
 .fav-row.fav-drag-disabled,
 .fav-row.fav-drag-disabled .fav-drag { cursor: default; }
+
+
+.plan-modal-card { width: min(640px, 100%); }
+.plan-form { padding: 12px 16px 16px; display: flex; flex-direction: column; gap: 12px; overflow: auto; }
+.plan-form label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--muted); }
+.plan-form input, .plan-form textarea { font: inherit; color: var(--ink); padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+.plan-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 640px) { .plan-form-grid { grid-template-columns: 1fr; } }
+.signal-cell { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.signal-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex: 0 0 auto; box-shadow: 0 0 0 1px rgba(0,0,0,.06); }
+.signal-dot.buy { background: var(--danger); }
+.signal-dot.sell { background: var(--accent); }
+.signal-dot.hold { background: #9a8f7e; }
+.signal-dot.none { background: #d5cbbd; }
+.plan-reason { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; }
+.plan-actions { display: flex; gap: 6px; flex-wrap: wrap; }

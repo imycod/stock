@@ -110,6 +110,25 @@ function initSchema() {
       UNIQUE(code, trade_date)
     );
 
+    CREATE TABLE IF NOT EXISTS trade_plans (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      code TEXT NOT NULL,
+      name TEXT,
+      buy_price REAL,
+      buy_time TEXT,
+      sell_price REAL,
+      sell_time TEXT,
+      note TEXT,
+      ai_signal TEXT,
+      ai_reason TEXT,
+      ai_analyzed_at TEXT,
+      created_at TEXT DEFAULT (datetime('now','localtime')),
+      updated_at TEXT DEFAULT (datetime('now','localtime'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_trade_plans_code ON trade_plans(code);
+    CREATE INDEX IF NOT EXISTS idx_trade_plans_updated ON trade_plans(updated_at DESC);
+
     CREATE INDEX IF NOT EXISTS idx_small_minute_date ON minute_snapshots(trade_date, code);
     CREATE INDEX IF NOT EXISTS idx_small_minute_code ON minute_snapshots(code, id DESC);
     CREATE INDEX IF NOT EXISTS idx_daily_remarks_code ON daily_remarks(code, trade_date DESC);
@@ -563,6 +582,143 @@ function getDailyRemarkCounts(codes) {
   return map;
 }
 
+
+function mapTradePlan(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    code: row.code,
+    name: row.name || '',
+    buyPrice: row.buy_price,
+    buyTime: row.buy_time,
+    sellPrice: row.sell_price,
+    sellTime: row.sell_time,
+    note: row.note || '',
+    aiSignal: row.ai_signal == null ? null : row.ai_signal,
+    aiReason: row.ai_reason || '',
+    aiAnalyzedAt: row.ai_analyzed_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function getTradePlans(q = '') {
+  const rows = getDb()
+    .prepare('SELECT * FROM trade_plans ORDER BY updated_at DESC, id DESC')
+    .all();
+  const needle = String(q || '').trim().toLowerCase();
+  return rows
+    .map(mapTradePlan)
+    .filter((r) => {
+      if (!needle) return true;
+      return (
+        String(r.code).toLowerCase().includes(needle) ||
+        String(r.name).toLowerCase().includes(needle)
+      );
+    });
+}
+
+function getTradePlan(id) {
+  const row = getDb().prepare('SELECT * FROM trade_plans WHERE id = ?').get(id);
+  return mapTradePlan(row);
+}
+
+function createTradePlan(fields) {
+  const f = fields || {};
+  const info = getDb()
+    .prepare(
+      `INSERT INTO trade_plans
+        (code, name, buy_price, buy_time, sell_price, sell_time, note, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now','localtime'), datetime('now','localtime'))`
+    )
+    .run(
+      String(f.code || '').trim(),
+      f.name == null ? '' : String(f.name),
+      f.buyPrice == null || f.buyPrice === '' ? null : Number(f.buyPrice),
+      f.buyTime == null || f.buyTime === '' ? null : String(f.buyTime),
+      f.sellPrice == null || f.sellPrice === '' ? null : Number(f.sellPrice),
+      f.sellTime == null || f.sellTime === '' ? null : String(f.sellTime),
+      f.note == null ? '' : String(f.note)
+    );
+  return getTradePlan(info.lastInsertRowid);
+}
+
+function updateTradePlan(id, fields) {
+  const cur = getTradePlan(id);
+  if (!cur) return null;
+  const f = fields || {};
+  const next = {
+    code: f.code != null ? String(f.code).trim() : cur.code,
+    name: f.name != null ? String(f.name) : cur.name,
+    buyPrice: Object.prototype.hasOwnProperty.call(f, 'buyPrice')
+      ? f.buyPrice == null || f.buyPrice === ''
+        ? null
+        : Number(f.buyPrice)
+      : cur.buyPrice,
+    buyTime: Object.prototype.hasOwnProperty.call(f, 'buyTime')
+      ? f.buyTime == null || f.buyTime === ''
+        ? null
+        : String(f.buyTime)
+      : cur.buyTime,
+    sellPrice: Object.prototype.hasOwnProperty.call(f, 'sellPrice')
+      ? f.sellPrice == null || f.sellPrice === ''
+        ? null
+        : Number(f.sellPrice)
+      : cur.sellPrice,
+    sellTime: Object.prototype.hasOwnProperty.call(f, 'sellTime')
+      ? f.sellTime == null || f.sellTime === ''
+        ? null
+        : String(f.sellTime)
+      : cur.sellTime,
+    note: Object.prototype.hasOwnProperty.call(f, 'note')
+      ? f.note == null
+        ? ''
+        : String(f.note)
+      : cur.note,
+  };
+  getDb()
+    .prepare(
+      `UPDATE trade_plans SET
+        code = ?, name = ?, buy_price = ?, buy_time = ?,
+        sell_price = ?, sell_time = ?, note = ?,
+        updated_at = datetime('now','localtime')
+       WHERE id = ?`
+    )
+    .run(
+      next.code,
+      next.name,
+      next.buyPrice,
+      next.buyTime,
+      next.sellPrice,
+      next.sellTime,
+      next.note,
+      id
+    );
+  return getTradePlan(id);
+}
+
+function deleteTradePlan(id) {
+  return getDb().prepare('DELETE FROM trade_plans WHERE id = ?').run(id);
+}
+
+function updateTradePlanAi(id, payload) {
+  const p = payload || {};
+  getDb()
+    .prepare(
+      `UPDATE trade_plans SET
+        ai_signal = ?, ai_reason = ?, ai_analyzed_at = ?,
+        updated_at = datetime('now','localtime')
+       WHERE id = ?`
+    )
+    .run(
+      p.aiSignal == null ? null : String(p.aiSignal),
+      p.aiReason == null ? '' : String(p.aiReason),
+      p.aiAnalyzedAt == null ? null : String(p.aiAnalyzedAt),
+      id
+    );
+  return getTradePlan(id);
+}
+
 module.exports = {
   getDb,
   dbPath,
@@ -594,4 +750,11 @@ module.exports = {
   deleteDailyRemark,
   countDailyRemarks,
   getDailyRemarkCounts,
+  mapTradePlan,
+  getTradePlans,
+  getTradePlan,
+  createTradePlan,
+  updateTradePlan,
+  deleteTradePlan,
+  updateTradePlanAi,
 };
