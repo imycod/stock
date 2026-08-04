@@ -664,6 +664,17 @@ function todayShanghai() {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date());
 }
 
+function tomorrowShanghai() {
+  const today = todayShanghai();
+  const [y, m, d] = today.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() + 1);
+  const yy = dt.getUTCFullYear();
+  const mm = String(dt.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(dt.getUTCDate()).padStart(2, '0');
+  return `${yy}-${mm}-${dd}`;
+}
+
 function normalizePredictionOk(v) {
   if (v === true || v === 1 || v === '1' || v === 'true') return 1;
   if (v === false || v === 0 || v === '0' || v === 'false') return 0;
@@ -1036,6 +1047,45 @@ app.put('/api/trade-plans/:id', async (req, res) => {
     }
     const plan = smallDb.updateTradePlan(id, fields);
     res.json({ ok: true, plan });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message || String(e) });
+  }
+});
+
+
+app.get('/api/trade-plans/:id/checks', (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(400).json({ ok: false, error: '无效计划 id' });
+    }
+    const plan = smallDb.getTradePlan(id);
+    if (!plan) return res.status(404).json({ ok: false, error: '计划不存在' });
+    const tomorrow = tomorrowShanghai();
+    const rows = smallDb.getTradePlanChecks(id);
+    res.json({ ok: true, tomorrow, rows });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message || String(e) });
+  }
+});
+
+app.post('/api/trade-plans/:id/checks', (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(400).json({ ok: false, error: '无效计划 id' });
+    }
+    const plan = smallDb.getTradePlan(id);
+    if (!plan) return res.status(404).json({ ok: false, error: '计划不存在' });
+    const body = req.body || {};
+    const checkDate = String(body.checkDate || tomorrowShanghai()).trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(checkDate)) {
+      return res.status(400).json({ ok: false, error: '无效日期' });
+    }
+    const predictionOk = normalizePredictionOk(body.predictionOk);
+    smallDb.upsertTradePlanCheck({ planId: id, checkDate, predictionOk });
+    const rows = smallDb.getTradePlanChecks(id);
+    res.json({ ok: true, tomorrow: tomorrowShanghai(), rows });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message || String(e) });
   }

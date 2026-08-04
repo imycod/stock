@@ -129,6 +129,18 @@ function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_trade_plans_code ON trade_plans(code);
     CREATE INDEX IF NOT EXISTS idx_trade_plans_updated ON trade_plans(updated_at DESC);
 
+    CREATE TABLE IF NOT EXISTS trade_plan_checks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      plan_id INTEGER NOT NULL,
+      check_date TEXT NOT NULL,
+      prediction_ok INTEGER,
+      created_at TEXT DEFAULT (datetime('now','localtime')),
+      updated_at TEXT DEFAULT (datetime('now','localtime')),
+      UNIQUE(plan_id, check_date)
+    );
+    CREATE INDEX IF NOT EXISTS idx_trade_plan_checks_plan ON trade_plan_checks(plan_id, check_date DESC);
+
+
     CREATE INDEX IF NOT EXISTS idx_small_minute_date ON minute_snapshots(trade_date, code);
     CREATE INDEX IF NOT EXISTS idx_small_minute_code ON minute_snapshots(code, id DESC);
     CREATE INDEX IF NOT EXISTS idx_daily_remarks_code ON daily_remarks(code, trade_date DESC);
@@ -698,8 +710,59 @@ function updateTradePlan(id, fields) {
 }
 
 function deleteTradePlan(id) {
-  return getDb().prepare('DELETE FROM trade_plans WHERE id = ?').run(id);
+  const database = getDb();
+  database.prepare('DELETE FROM trade_plan_checks WHERE plan_id = ?').run(id);
+  return database.prepare('DELETE FROM trade_plans WHERE id = ?').run(id);
 }
+
+function mapTradePlanCheck(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    planId: row.plan_id,
+    checkDate: row.check_date,
+    predictionOk: row.prediction_ok == null ? null : row.prediction_ok,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function getTradePlanChecks(planId) {
+  const rows = getDb()
+    .prepare(
+      'SELECT id, plan_id, check_date, prediction_ok, created_at, updated_at FROM trade_plan_checks WHERE plan_id = ? ORDER BY check_date DESC'
+    )
+    .all(planId);
+  return rows.map(mapTradePlanCheck);
+}
+
+function upsertTradePlanCheck(row) {
+  const stmt = getDb().prepare(`
+    INSERT INTO trade_plan_checks (plan_id, check_date, prediction_ok, created_at, updated_at)
+    VALUES (@planId, @checkDate, @predictionOk, datetime('now','localtime'), datetime('now','localtime'))
+    ON CONFLICT(plan_id, check_date) DO UPDATE SET
+      prediction_ok=excluded.prediction_ok,
+      updated_at=datetime('now','localtime')
+  `);
+  stmt.run({
+    planId: row.planId,
+    checkDate: row.checkDate,
+    predictionOk: row.predictionOk == null ? null : row.predictionOk,
+  });
+  const saved = getDb()
+    .prepare(
+      'SELECT id, plan_id, check_date, prediction_ok, created_at, updated_at FROM trade_plan_checks WHERE plan_id = ? AND check_date = ?'
+    )
+    .get(row.planId, row.checkDate);
+  return mapTradePlanCheck(saved);
+}
+
+function deleteTradePlanCheck(planId, checkDate) {
+  return getDb()
+    .prepare('DELETE FROM trade_plan_checks WHERE plan_id = ? AND check_date = ?')
+    .run(planId, checkDate);
+}
+
 
 function updateTradePlanAi(id, payload) {
   const p = payload || {};
@@ -756,5 +819,9 @@ module.exports = {
   createTradePlan,
   updateTradePlan,
   deleteTradePlan,
+  mapTradePlanCheck,
+  getTradePlanChecks,
+  upsertTradePlanCheck,
+  deleteTradePlanCheck,
   updateTradePlanAi,
 };

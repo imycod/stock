@@ -601,6 +601,65 @@ function todayShanghai() {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date());
 }
 
+function tomorrowShanghai() {
+  const today = todayShanghai();
+  const parts = today.split('-').map(Number);
+  const dt = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2]));
+  dt.setUTCDate(dt.getUTCDate() + 1);
+  return dt.toISOString().slice(0, 10);
+}
+
+function renderPlanCheckTable(rows) {
+  const tbody = $('#planCheckTable tbody');
+  if (!tbody) return;
+  tbody.innerHTML = (rows || []).map(function (r) {
+    const pred = r.predictionOk === 1 || r.predictionOk === true ? '1'
+      : r.predictionOk === 0 || r.predictionOk === false ? '0' : '';
+    return (
+      '<tr data-date="' + escapeHtml(r.checkDate) + '">' +
+      '<td class="remark-date">' + escapeHtml(r.checkDate) + '</td>' +
+      '<td><select class="plan-check-pred">' +
+      '<option value=""' + (pred === '' ? ' selected' : '') + '>未评</option>' +
+      '<option value="1"' + (pred === '1' ? ' selected' : '') + '>正确</option>' +
+      '<option value="0"' + (pred === '0' ? ' selected' : '') + '>错误</option>' +
+      '</select></td></tr>'
+    );
+  }).join('');
+}
+
+async function loadPlanChecks(planId) {
+  const block = $('#planCheckBlock');
+  if (!planId) {
+    if (block) block.classList.add('hidden');
+    renderPlanCheckTable([]);
+    return;
+  }
+  if (block) block.classList.remove('hidden');
+  const data = await api('/api/trade-plans/' + planId + '/checks');
+  const tomorrow = data.tomorrow || tomorrowShanghai();
+  let rows = data.rows || [];
+  if (!rows.some(function (r) { return r.checkDate === tomorrow; })) {
+    rows = [{ checkDate: tomorrow, predictionOk: null }].concat(rows);
+  }
+  renderPlanCheckTable(rows);
+}
+
+async function savePlanChecks(planId) {
+  if (!planId) return;
+  const trs = document.querySelectorAll('#planCheckTable tbody tr');
+  for (const tr of trs) {
+    const checkDate = tr.getAttribute('data-date');
+    const predVal = tr.querySelector('.plan-check-pred').value;
+    await api('/api/trade-plans/' + planId + '/checks', {
+      method: 'POST',
+      body: JSON.stringify({
+        checkDate: checkDate,
+        predictionOk: predVal === '' ? null : Number(predVal),
+      }),
+    });
+  }
+}
+
 async function openRemarkModal(code, name) {
   bindRemarkModalEvents();
   state.remarkSession = { code: code, name: name || '' };
@@ -1567,7 +1626,7 @@ function renderPlanTable(rows) {
       const row = (state.planRows || []).find(function (x) {
         return x.id === id;
       });
-      if (row) openPlanModal(row);
+      if (row) openPlanModal(row).catch(function (e) { alert(e.message || e); });
     });
   });
   tbody.querySelectorAll('.btn-plan-del').forEach(function (btn) {
@@ -1643,7 +1702,7 @@ function bindPlanModalOnce() {
   });
 }
 
-function openPlanModal(editRow) {
+async function openPlanModal(editRow) {
   bindPlanModalOnce();
   const modal = $('#planModal');
   if (!modal) return;
@@ -1671,6 +1730,11 @@ function openPlanModal(editRow) {
     $('#planNote').value = '';
   }
   modal.classList.remove('hidden');
+  if (editRow && editRow.id) {
+    await loadPlanChecks(editRow.id);
+  } else {
+    await loadPlanChecks(null);
+  }
 }
 
 function closePlanModal() {
@@ -1738,16 +1802,20 @@ async function savePlan() {
     throw new Error('卖出价格式无效');
   }
   console.log('[plan] calling API', editId ? 'PUT' : 'POST', body);
+  let savedId = editId ? Number(editId) : null;
   if (editId) {
     await api('/api/trade-plans/' + encodeURIComponent(editId), {
       method: 'PUT',
       body: JSON.stringify(body),
     });
+    await savePlanChecks(savedId);
   } else {
-    await api('/api/trade-plans', {
+    const created = await api('/api/trade-plans', {
       method: 'POST',
       body: JSON.stringify(body),
     });
+    savedId = created && created.plan && created.plan.id ? created.plan.id : null;
+    if (savedId) await savePlanChecks(savedId);
   }
   closePlanModal();
   await loadTradePlans();
@@ -1882,7 +1950,7 @@ async function init() {
     });
   }
   if ($('#btnPlanCreate')) {
-    $('#btnPlanCreate').addEventListener('click', () => openPlanModal(null));
+    $('#btnPlanCreate').addEventListener('click', () => openPlanModal(null).catch(function (e) { alert(e.message || e); }));
   }
   if ($('#btnPlanRefresh')) {
     $('#btnPlanRefresh').addEventListener('click', () => loadTradePlans().catch(alert));
