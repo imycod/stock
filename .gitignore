@@ -1,8 +1,9 @@
-node_modules/
-data/
+﻿node_modules/
 *.db
 *.db-wal
 *.db-shm
+!data/small-live.db
 .DS_Store
 .env
 .env.local
+
