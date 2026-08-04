@@ -889,10 +889,12 @@ async function toggleFavorite(row) {
 function renderFavTable(rows) {
   const tbody = $('#favTable tbody');
   if (!tbody) return;
+  const filterQ = $('#favFilterQ') ? $('#favFilterQ').value.trim() : '';
+  const dragEnabled = !filterQ;
   if (!rows.length) {
     const hasAll = (state.favRows || []).length > 0;
     tbody.innerHTML =
-      '<tr><td colspan="11">' +
+      '<tr><td colspan="12">' +
       (hasAll ? '无匹配收藏，请调整名称/代码筛选' : '暂无收藏。可在筛选结果中勾选收藏') +
       '</td></tr>';
     return;
@@ -900,12 +902,16 @@ function renderFavTable(rows) {
   tbody.innerHTML = rows
     .map(function (f) {
       const r = f.row || {};
+      const code = escapeHtml(f.code);
+      const rowClass = 'fav-row' + (dragEnabled ? '' : ' fav-drag-disabled');
+      const dragAttr = dragEnabled ? ' draggable="true"' : '';
       return (
-        '<tr>' +
+        '<tr class="' + rowClass + '" data-code="' + code + '"' + dragAttr + '>' +
+        '<td class="fav-drag" title="拖拽排序"><span class="fav-drag-handle">⋮⋮</span></td>' +
         '<td class="fav-actions"><button type="button" class="btn btn-secondary btn-sm btn-unfav" data-code="' +
-        escapeHtml(f.code) +
+        code +
         '">取消收藏</button></td>' +
-        '<td>' + escapeHtml(f.code) + '</td>' +
+        '<td>' + code + '</td>' +
         '<td>' + escapeHtml(f.name || r.name || '') + '</td>' +
         '<td>' + escapeHtml(r.industry || '') + '</td>' +
         '<td>' + escapeHtml(r.profitStage || '') + '</td>' +
@@ -929,6 +935,59 @@ function renderFavTable(rows) {
       }
     });
   });
+  if (dragEnabled) {
+    let dragCode = null;
+    tbody.querySelectorAll('tr.fav-row').forEach(function (tr) {
+      tr.addEventListener('dragstart', function (e) {
+        dragCode = tr.dataset.code;
+        tr.classList.add('dragging');
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', dragCode);
+      });
+      tr.addEventListener('dragend', function () {
+        tr.classList.remove('dragging');
+        tbody.querySelectorAll('tr.drag-over').forEach(function (el) {
+          el.classList.remove('drag-over');
+        });
+        dragCode = null;
+      });
+      tr.addEventListener('dragover', function (e) {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        tr.classList.add('drag-over');
+      });
+      tr.addEventListener('dragleave', function () {
+        tr.classList.remove('drag-over');
+      });
+      tr.addEventListener('drop', async function (e) {
+        e.preventDefault();
+        tr.classList.remove('drag-over');
+        const targetCode = tr.dataset.code;
+        if (!dragCode || dragCode === targetCode) return;
+        const list = state.favRows.slice();
+        const from = list.findIndex(function (x) { return x.code === dragCode; });
+        const to = list.findIndex(function (x) { return x.code === targetCode; });
+        if (from < 0 || to < 0) return;
+        const item = list.splice(from, 1)[0];
+        list.splice(to, 0, item);
+        state.favRows = list;
+        applyFavFilter();
+        try {
+          const data = await api('/api/favorites/reorder', {
+            method: 'PUT',
+            body: JSON.stringify({ codes: list.map(function (x) { return x.code; }) }),
+          });
+          state.favRows = data.rows || list;
+          state.favoriteCodes = new Set(
+            data.codes || (state.favRows || []).map(function (r) { return r.code; })
+          );
+          applyFavFilter();
+        } catch (err) {
+          alert(err.message);
+        }
+      });
+    });
+  }
 }
 
 function applyFavFilter() {
@@ -943,9 +1002,11 @@ function applyFavFilter() {
   });
   renderFavTable(filtered);
   if ($('#favStatus')) {
-    $('#favStatus').textContent = q
+    let msg = q
       ? '显示 ' + filtered.length + '/' + state.favRows.length + ' 只收藏'
       : '共 ' + state.favRows.length + ' 只收藏';
+    if (q) msg += '（筛选中不可排序）';
+    $('#favStatus').textContent = msg;
   }
   return filtered;
 }

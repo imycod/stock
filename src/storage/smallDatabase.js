@@ -86,6 +86,7 @@ function initSchema() {
       name TEXT,
       note TEXT,
       payload TEXT,
+      sort_order INTEGER DEFAULT 0,
       created_at TEXT DEFAULT (datetime('now','localtime')),
       updated_at TEXT DEFAULT (datetime('now','localtime'))
     );
@@ -113,6 +114,19 @@ function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_small_minute_code ON minute_snapshots(code, id DESC);
     CREATE INDEX IF NOT EXISTS idx_daily_remarks_code ON daily_remarks(code, trade_date DESC);
   `);
+
+  const cols = db.prepare(`PRAGMA table_info(favorites)`).all().map((c) => c.name);
+  if (!cols.includes('sort_order')) {
+    db.exec(`ALTER TABLE favorites ADD COLUMN sort_order INTEGER DEFAULT 0`);
+    const rows = db
+      .prepare(`SELECT code FROM favorites ORDER BY COALESCE(sort_order, 999999) ASC, updated_at DESC, created_at DESC`)
+      .all();
+    const upd = db.prepare(`UPDATE favorites SET sort_order = ? WHERE code = ?`);
+    const tx = db.transaction((list) => {
+      list.forEach((r, i) => upd.run(i, r.code));
+    });
+    tx(rows);
+  }
 }
 
 function upsertWatchlistStock(row) {
@@ -393,8 +407,12 @@ function getStats() {
 
 function upsertFavorite(row) {
   const stmt = getDb().prepare(`
-    INSERT INTO favorites (code, name, note, payload, created_at, updated_at)
-    VALUES (@code, @name, @note, @payload, datetime('now','localtime'), datetime('now','localtime'))
+    INSERT INTO favorites (code, name, note, payload, sort_order, created_at, updated_at)
+    VALUES (
+      @code, @name, @note, @payload,
+      COALESCE((SELECT MAX(sort_order) + 1 FROM favorites), 0),
+      datetime('now','localtime'), datetime('now','localtime')
+    )
     ON CONFLICT(code) DO UPDATE SET
       name=COALESCE(excluded.name, favorites.name),
       note=COALESCE(excluded.note, favorites.note),
@@ -423,7 +441,7 @@ function getFavorite(code) {
 
 function getFavorites(q = '') {
   const rows = getDb()
-    .prepare('SELECT * FROM favorites ORDER BY updated_at DESC, created_at DESC')
+    .prepare('SELECT * FROM favorites ORDER BY COALESCE(sort_order, 999999) ASC, updated_at DESC, created_at DESC')
     .all();
   const needle = String(q || '').trim().toLowerCase();
   return rows
@@ -434,6 +452,7 @@ function getFavorites(q = '') {
         code: row.code,
         name: row.name || payload.name || '',
         note: row.note || '',
+        sortOrder: row.sort_order,
         createdAt: row.created_at,
         updatedAt: row.updated_at,
         row: payload,
@@ -448,8 +467,19 @@ function getFavorites(q = '') {
     });
 }
 
+function reorderFavorites(codes) {
+  const upd = getDb().prepare(`UPDATE favorites SET sort_order = ? WHERE code = ?`);
+  const tx = getDb().transaction((list) => {
+    (list || []).forEach((code, i) => {
+      upd.run(i, String(code));
+    });
+  });
+  tx(codes);
+  return getFavorites();
+}
+
 function getFavoriteCodes() {
-  return getDb().prepare('SELECT code FROM favorites').all().map((r) => r.code);
+  return getDb().prepare('SELECT code FROM favorites ORDER BY COALESCE(sort_order, 999999) ASC, updated_at DESC, created_at DESC').all().map((r) => r.code);
 }
 
 function isFavorite(code) {
@@ -556,6 +586,7 @@ module.exports = {
   removeFavorite,
   getFavorite,
   getFavorites,
+  reorderFavorites,
   getFavoriteCodes,
   isFavorite,
   getDailyRemarks,

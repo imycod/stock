@@ -644,6 +644,22 @@ app.delete('/api/favorites/:code', (req, res) => {
   }
 });
 
+app.put('/api/favorites/reorder', (req, res) => {
+  try {
+    const codes = Array.isArray(req.body?.codes) ? req.body.codes.map((c) => String(c).trim()) : [];
+    if (!codes.length) {
+      return res.status(400).json({ ok: false, error: '缺少排序列表' });
+    }
+    if (!codes.every((c) => /^\d{6}$/.test(c))) {
+      return res.status(400).json({ ok: false, error: '无效代码列表' });
+    }
+    const rows = smallDb.reorderFavorites(codes);
+    res.json({ ok: true, rows, total: rows.length, codes: smallDb.getFavoriteCodes() });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message || String(e) });
+  }
+});
+
 function todayShanghai() {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date());
 }
